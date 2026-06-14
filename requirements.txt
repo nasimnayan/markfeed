@@ -1,0 +1,22 @@
+# Web UI
+fastapi
+uvicorn[standard]
+python-multipart
+markdown
+
+# Conversion backend
+pymupdf
+pymupdf4llm
+pytesseract
+pillow
+pandas
+tabulate
+mammoth
+markdownify
+rich
+img2table
+
+# Optional layout-aware OCR (experimental, may crash on some CPUs)
+paddleocr
+paddlepaddle
+paddlex[ocr]

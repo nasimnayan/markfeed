@@ -1,0 +1,41 @@
+# Claude Code local files
+.claude/
+CLAUDE.local.md
+
+# Runtime job working dirs
+jobs/
+
+# Prototype OCR output dump (large)
+output/
+output_*/
+
+# Test / sample documents (copyrighted — do NOT publish)
+chemistry-1.pdf
+chemistry-2.pdf
+*.pdf
+*.docx
+!docs/**/*.pdf
+
+# Logs
+*.log
+server_log.txt
+*_log.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# PaddleOCR/PaddleX downloaded model weights (large; auto-download on first run)
+.paddlex/
