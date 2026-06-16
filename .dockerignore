@@ -1,0 +1,18 @@
+# Keep the image small and free of local/private data
+.git
+.github
+.claude
+jobs/
+output/
+output_*/
+*.pdf
+*.docx
+!docs/**/*.pdf
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.paddlex/
+*.log
+*_log.txt

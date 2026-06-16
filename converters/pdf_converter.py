@@ -1,5 +1,6 @@
 """Convert PDF files (digital or scanned) to Markdown with per-page stats."""
 
+import io
 import re
 from pathlib import Path
 
@@ -11,7 +12,81 @@ from PIL import Image
 from converters import layout_ocr, tesseract_config  # noqa: F401  (sets tesseract path)
 from converters.stats import count_formulas, count_images, count_md_tables, text_stats
 
+# pymupdf4llm wraps an image-with-text-layer region as an "omitted picture" plus a
+# flat "picture text" dump of everything inside it. When that region is actually a
+# data table, find_tables() reconstructs it correctly -- swap the dump for that.
+_PICTURE_TEXT_RE = re.compile(
+    r"\*\*==> picture \[[^\]]*\] intentionally omitted <==\*\*\n\n"
+    r"\*\*----- Start of picture text -----\*\*<br>\n"
+    r".*?"
+    r"\*\*----- End of picture text -----\*\*<br>\n?",
+    re.DOTALL,
+)
+
+# A table bbox covering almost the whole page is usually a false positive from the
+# page border, not a real table.
+_TABLE_AREA_RATIO_MAX = 0.95
+
+
+def _inject_missing_tables(page_md: str, page: fitz.Page) -> str:
+    """Replace OCR'd "picture text" dumps with proper Markdown tables where possible."""
+    if count_md_tables(page_md) > 0 or "----- Start of picture text -----" not in page_md:
+        return page_md
+
+    page_area = page.rect.width * page.rect.height
+    tables = [
+        t
+        for t in page.find_tables().tables
+        if t.row_count >= 2
+        and t.col_count >= 2
+        and (t.bbox[2] - t.bbox[0]) * (t.bbox[3] - t.bbox[1]) / page_area <= _TABLE_AREA_RATIO_MAX
+    ]
+    if not tables:
+        return page_md
+
+    table_md = "\n\n".join(t.to_markdown().strip() for t in tables)
+    remainder = _PICTURE_TEXT_RE.sub("", page_md).strip()
+    return f"{remainder}\n\n{table_md}" if remainder else table_md
+
 DIGITAL_TEXT_THRESHOLD = 20  # min chars of extractable text to treat a page as "digital"
+
+# Some "scanned" pages are exported as a single oversized image covering the whole
+# page with only a tiny watermark as real text (e.g. "www.example.com" repeated a
+# few times). get_text() then exceeds DIGITAL_TEXT_THRESHOLD even though the real
+# content needs OCR. Detect that case and OCR the embedded image directly: only
+# check pages whose text is still small (likely just a watermark), and only treat
+# an image as the page content if it covers almost the entire page.
+DOMINANT_IMAGE_MAX_TEXT = 200
+DOMINANT_IMAGE_AREA_THRESHOLD = 0.9
+
+
+def _dominant_page_image(doc: fitz.Document, page: fitz.Page) -> Image.Image | None:
+    """Return the embedded image as a PIL Image if it covers nearly the whole page."""
+    page_area = page.rect.width * page.rect.height
+    if not page_area:
+        return None
+    for info in page.get_image_info(xrefs=True):
+        bbox = fitz.Rect(info["bbox"]) & page.rect
+        if (bbox.width * bbox.height) / page_area >= DOMINANT_IMAGE_AREA_THRESHOLD:
+            data = doc.extract_image(info["xref"])["image"]
+            return Image.open(io.BytesIO(data)).convert("RGB")
+    return None
+
+
+# Tesseract rejects images with a dimension beyond ~32767px ("Image too large").
+# Some pages (e.g. very tall single-image scans) render past that at high DPI, so
+# cap the render size and accept lower resolution rather than crashing the job.
+MAX_RENDER_DIM = 8000
+
+
+def _capped_matrix(rect: fitz.Rect, matrix: fitz.Matrix) -> fitz.Matrix:
+    """Shrink the render matrix so neither output dimension exceeds MAX_RENDER_DIM."""
+    transformed = rect * matrix
+    longest = max(transformed.width, transformed.height)
+    if longest <= MAX_RENDER_DIM:
+        return matrix
+    scale = MAX_RENDER_DIM / longest
+    return matrix * fitz.Matrix(scale, scale)
 
 
 _IMAGE_LINK_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
@@ -53,12 +128,17 @@ def convert_pdf(
     end_page: int | None = None,
     progress_callback=None,
     previews_dir: Path | None = None,
+    page_callback=None,
 ) -> dict:
     """Convert a PDF to Markdown.
 
     Returns a dict with keys: markdown (str), pages (list of per-page stat dicts).
     When previews_dir is given, a downscaled JPEG of each page is saved there and
     its filename recorded on the page row (for the side-by-side compare view).
+    When page_callback is given it is called as page_callback(page_index, page_md,
+    row) the moment each page finishes — this powers the live, during-conversion
+    compare view (the caller persists the chunk + row so the UI can show it before
+    the whole document is done).
     """
     images_dir.mkdir(parents=True, exist_ok=True)
     doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -82,15 +162,23 @@ def convert_pdf(
         layout_counts = None
         rendered_img = None  # full-res render, reused for the preview when present
 
-        if len(text) > DIGITAL_TEXT_THRESHOLD:
+        dominant_img = None
+        if len(text) <= DOMINANT_IMAGE_MAX_TEXT:
+            dominant_img = _dominant_page_image(doc, page)
+
+        if len(text) > DIGITAL_TEXT_THRESHOLD and dominant_img is None:
             page_md = pymupdf4llm.to_markdown(
-                doc, pages=[i], write_images=True, image_path=str(images_dir)
+                doc, pages=[i], write_images=True, image_path=str(images_dir), use_ocr=False
             ).strip()
             page_md = _relativize_image_paths(page_md, images_dir)
+            page_md = _inject_missing_tables(page_md, page)
             source = "digital"
         else:
-            pix = page.get_pixmap(matrix=matrix)
-            rendered_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            if dominant_img is not None:
+                rendered_img = dominant_img
+            else:
+                pix = page.get_pixmap(matrix=_capped_matrix(page.rect, matrix))
+                rendered_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
             if use_layout:
                 try:
@@ -128,6 +216,8 @@ def convert_pdf(
             row["formula_count"] = count_formulas(page_md)
         page_rows.append(row)
 
+        if page_callback:
+            page_callback(i, page_md, row)
         if progress_callback:
             progress_callback(i - start + 1, end - start)
 

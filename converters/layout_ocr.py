@@ -83,7 +83,7 @@ def process_page_image(img: Image.Image, lang: str, images_dir: Path, page_index
             continue
 
         if label in TABLE_LABELS:
-            table_md = _table_to_markdown(crop, lang)
+            table_md = _table_to_markdown(crop, lang) or _ocr_table_grid(crop, lang)
             if table_md:
                 md_parts.append(table_md)
                 counts["table_count"] += 1
@@ -148,6 +148,70 @@ def _table_to_markdown(crop: Image.Image, lang: str) -> str | None:
         return df.fillna("").astype(str).to_markdown(index=False)
     except Exception:
         return None
+
+
+def _ocr_table_grid(crop: Image.Image, lang: str) -> str | None:
+    """Reconstruct a markdown table from word bounding boxes.
+
+    Fallback for tables img2table can't parse (faint/missing grid lines):
+    values are still column-aligned in the scan, so cluster word positions
+    into rows and columns and rebuild the grid from that.
+    """
+    data = pytesseract.image_to_data(crop, lang=lang, output_type=pytesseract.Output.DICT)
+    words = [
+        {"text": data["text"][i].strip(), "x": data["left"][i], "y": data["top"][i], "h": data["height"][i], "w": data["width"][i]}
+        for i in range(len(data["text"]))
+        if data["text"][i].strip()
+    ]
+    if len(words) < 4:
+        return None
+
+    # group into rows by vertical position
+    words.sort(key=lambda w: w["y"])
+    avg_h = sum(w["h"] for w in words) / len(words)
+    row_gap = avg_h * 0.6
+    rows = [[words[0]]]
+    for w in words[1:]:
+        if w["y"] - rows[-1][-1]["y"] > row_gap:
+            rows.append([w])
+        else:
+            rows[-1].append(w)
+    for r in rows:
+        r.sort(key=lambda w: w["x"])
+    if len(rows) < 2:
+        return None
+
+    # cluster word x-starts across all rows into column anchors
+    xs = sorted(w["x"] for row in rows for w in row)
+    avg_w = sum(w["w"] for row in rows for w in row) / len(xs)
+    col_gap = avg_w * 1.5
+    clusters = [[xs[0]]]
+    for x in xs[1:]:
+        if x - clusters[-1][-1] > col_gap:
+            clusters.append([x])
+        else:
+            clusters[-1].append(x)
+    columns = [sum(c) / len(c) for c in clusters]
+    if len(columns) < 2:
+        return None
+
+    # assign each word to its nearest column and build the grid
+    grid = []
+    for row in rows:
+        cells = [""] * len(columns)
+        for w in row:
+            idx = min(range(len(columns)), key=lambda i: abs(columns[i] - w["x"]))
+            cells[idx] = (cells[idx] + " " + w["text"]).strip()
+        grid.append([_escape_cell(c) for c in cells])
+
+    lines = ["| " + " | ".join(grid[0]) + " |", "| " + " | ".join(["---"] * len(columns)) + " |"]
+    for row in grid[1:]:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
+def _escape_cell(text: str) -> str:
+    return text.replace("|", "\\|")
 
 
 def _iou(a, b) -> float:

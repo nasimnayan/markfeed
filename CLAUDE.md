@@ -1,13 +1,17 @@
-# CLAUDE.md — Folio
+npx @anthropic-ai/claude-code
+
+# CLAUDE.md — MarkFeed
 
 Context for future Claude Code sessions working on this project. Read this first.
+(Project was renamed from "Folio" → **MarkFeed**.)
 
 ## What this is
 
-**Folio** is a fully-offline web app that converts **scanned PDFs, digital PDFs,
-and Word (.docx)** files into clean **Markdown**, with a per-page accuracy stats
-table and a side-by-side **verify** view (original scan vs converted text). It was
-built primarily for OCR of **Bengali + English** scanned textbooks.
+**MarkFeed** is a fully-offline web app that converts **scanned PDFs, digital PDFs,
+Word (.docx), and spreadsheets (CSV / .xls / .xlsx)** files into clean **Markdown**,
+with a per-page accuracy stats table and a side-by-side **verify** view (original
+scan vs converted text). It was built primarily for OCR of **Bengali + English**
+scanned textbooks.
 
 **No LLM, no cloud APIs.** Everything runs locally with open-source packages
 (PyMuPDF, Tesseract, PaddleOCR layout model, img2table, mammoth, FastAPI).
@@ -71,6 +75,7 @@ converters/
   stats.py                  # word/char/image/table/formula counting (regex on markdown)
   pdf_converter.py          # routes digital vs scanned pages; saves page previews
   docx_converter.py         # mammoth -> HTML -> markdownify, image extraction, per-section stats
+  csv_excel_converter.py    # pandas -> Markdown tables (CSV single table; each Excel sheet = a section)
   layout_ocr.py             # diagram+table extraction (LayoutDetection + Tesseract + img2table)
   limits.py                 # extraction_page_cap(total) -> 10/20/all
 
@@ -84,7 +89,7 @@ jobs/                       # runtime per-job working dirs (gitignored)
 ```
 
 ### Per-job directory layout (jobs/<uuid>/)
-- `input.pdf|input.docx`, `job.json` (options), `progress.json` (status/done/total),
+- `input.<ext>` (pdf/docx/csv/xls/xlsx), `job.json` (options), `progress.json` (status/done/total),
   `result.json` (stats rows minus markdown, + `label_col`), `converted.md`,
   `error.json` (on failure), `images/` (embedded figures), `previews/` (downscaled
   page JPEGs for the compare view — NOT in the download zip).
@@ -99,6 +104,16 @@ Per page, routed by whether the PDF page has an extractable text layer:
   - extraction mode (`use_layout=True`) → `layout_ocr.process_page_image()`,
     with try/except fallback to plain Tesseract on any failure.
 - Always saves a downscaled JPEG preview to `previews/` for the compare view.
+
+### Spreadsheet conversion (converters/csv_excel_converter.py)
+- `convert_csv_excel(file_bytes, file_type)` → `{markdown, sections}`, same contract
+  as `docx_converter` (`label_col="label"`, no page previews so the compare tab
+  auto-hides). Pure pandas — no OCR, no subprocess crash risk.
+- CSV → `pd.read_csv` (single table). Excel → `pd.read_excel(sheet_name=None)`
+  (`openpyxl` for .xlsx, `xlrd` for legacy .xls), **each sheet a `## name` section**.
+- `df.fillna("").to_markdown(index=False)` (tabulate) builds the pipe table; empty
+  sheet → `*No data*`. All rows converted (no cap — tabular is fast/stable).
+- Routed in `worker.py` via the `else` branch of the file_type dispatch.
 
 ### Layout extraction (converters/layout_ocr.py)
 - PaddleOCR **standalone `LayoutDetection`** (`PP-DocLayout_plus-L`,

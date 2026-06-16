@@ -73,6 +73,25 @@ def main() -> None:
                     {"status": "running", "done": done, "total": total, "updated_at": _now()},
                 )
 
+            # Live compare: persist each page the instant it finishes so the UI can
+            # show "original vs converted" while the rest of the document is still
+            # processing — not only at the end.
+            pages_dir = job_dir / "pages"
+            pages_dir.mkdir(parents=True, exist_ok=True)
+            live_rows: list[dict] = []
+
+            def on_page(page_index: int, page_md: str, row: dict) -> None:
+                (pages_dir / f"{page_index}.md").write_text(page_md, encoding="utf-8")
+                live_rows.append(
+                    {
+                        "page": row.get("page"),
+                        "source": row.get("source"),
+                        "preview": row.get("preview"),
+                        "word_count": row.get("word_count", 0),
+                    }
+                )
+                write_json_atomic(job_dir / "live.json", {"pages": live_rows})
+
             result = convert_pdf(
                 file_bytes,
                 images_dir,
@@ -83,14 +102,23 @@ def main() -> None:
                 end_page=job.get("end_page"),
                 progress_callback=on_progress,
                 previews_dir=job_dir / "previews",
+                page_callback=on_page,
             )
             rows = result["pages"]
             label_col = "page"
-        else:
+        elif job["file_type"] == "docx":
             from converters.docx_converter import convert_docx
 
             file_bytes = (job_dir / "input.docx").read_bytes()
             result = convert_docx(file_bytes, images_dir)
+            rows = result["sections"]
+            label_col = "label"
+        else:  # csv / xls / xlsx — tabular files rendered as Markdown tables
+            from converters.csv_excel_converter import convert_csv_excel
+
+            ftype = job["file_type"]
+            file_bytes = (job_dir / f"input.{ftype}").read_bytes()
+            result = convert_csv_excel(file_bytes, ftype)
             rows = result["sections"]
             label_col = "label"
 

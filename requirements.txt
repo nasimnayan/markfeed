@@ -11,6 +11,8 @@ pytesseract
 pillow
 pandas
 tabulate
+openpyxl
+xlrd
 mammoth
 markdownify
 rich

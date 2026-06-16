@@ -1,8 +1,20 @@
-# 📄 Folio — Documents to Markdown, fully offline
+<!-- Hugging Face Spaces reads this front-matter. Harmless on GitHub. -->
+---
+title: MarkFeed
+emoji: 📄
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
 
-Folio converts **scanned PDFs, digital PDFs, and Word (.docx)** files into clean
-**Markdown** — with extracted images, tables, a per-page accuracy stats table, and
-a side-by-side **verify** view (original scan vs converted text).
+# 📄 MarkFeed — Documents to clean Markdown, fully offline
+
+MarkFeed converts **scanned PDFs, digital PDFs, Word (.docx), and spreadsheets
+(CSV / Excel)** files into clean **Markdown** — with extracted images, tables, a
+per-page accuracy stats table, and a **live** side-by-side **verify** view
+(original scan vs converted text, updating as each page is read).
 
 It runs **100% offline. No LLM. No cloud APIs.** Built with open-source OCR
 (Tesseract), layout detection (PaddleOCR), and table extraction (img2table). It
@@ -76,11 +88,13 @@ See [CLAUDE.md](CLAUDE.md) for full architecture and design notes.
 
 ## 🌐 Hosting
 
-Folio is a **local/self-hosted** tool by design (it needs the Tesseract binary,
+MarkFeed is a **local/self-hosted** tool by design (it needs the Tesseract binary,
 PaddleOCR models, long-running processes, and a writable disk). It **cannot run on
-serverless platforms like Vercel/Netlify.** To host a shared instance, use a
-container host with persistent compute (Docker on a VPS, Render, Railway, Fly.io,
-or Hugging Face Spaces). A `Dockerfile` can be added for this — see issues.
+serverless platforms like Vercel/Netlify.** The recommended free host is **Hugging
+Face Spaces (Docker SDK), set to Private** — 2 vCPU / 16 GB RAM is enough for the
+PaddleOCR layout model. Because the app has no built-in login and the recent-jobs
+list is shared, **do not host it publicly without adding auth** (or keep the Space
+private). See `DEPLOY.md` for step-by-step GitHub → Hugging Face instructions.
 
 ## 🤝 Contributing
 

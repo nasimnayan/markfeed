@@ -8,6 +8,7 @@ registry only caches the running subprocess handle.
 
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -17,6 +18,11 @@ from uuid import uuid4
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKER_SCRIPT = PROJECT_ROOT / "worker.py"
 JOBS_ROOT = PROJECT_ROOT / "jobs"
+
+# Recent-conversions history is capped: only the newest MAX_HISTORY jobs are kept
+# on disk. Older ones are deleted automatically when a new job is created, so the
+# machine never accumulates conversions forever.
+MAX_HISTORY = 10
 
 
 def _now() -> str:
@@ -44,7 +50,7 @@ class JobManager:
         job_dir.mkdir(parents=True)
 
         file_type = options["file_type"]
-        input_name = "input.pdf" if file_type == "pdf" else "input.docx"
+        input_name = f"input.{file_type}"  # pdf / docx / csv / xls / xlsx
         (job_dir / input_name).write_bytes(file_bytes)
 
         job = {
@@ -56,6 +62,7 @@ class JobManager:
             "use_layout": options.get("use_layout", False),
             "start_page": options.get("start_page", 0),
             "end_page": options.get("end_page"),
+            "batch_id": options.get("batch_id"),
             "created_at": _now(),
         }
         (job_dir / "job.json").write_text(
@@ -66,7 +73,27 @@ class JobManager:
         )
 
         self._queue.put_nowait(job_id)
+        self._prune_history()
         return job_id
+
+    def _prune_history(self) -> None:
+        """Keep only the newest MAX_HISTORY job dirs; delete older ones.
+
+        Never removes the job that is currently running (its files are in use).
+        """
+        dirs = [d for d in self.jobs_root.iterdir() if d.is_dir()]
+        # Sort newest-first by created_at (fall back to mtime if job.json missing).
+        def _created(d: Path) -> str:
+            job = _read_json(d / "job.json")
+            if job and job.get("created_at"):
+                return job["created_at"]
+            return datetime.fromtimestamp(d.stat().st_mtime).isoformat()
+
+        dirs.sort(key=_created, reverse=True)
+        for stale in dirs[MAX_HISTORY:]:
+            if stale.name == self._current:
+                continue
+            shutil.rmtree(stale, ignore_errors=True)
 
     # ----- status ---------------------------------------------------------
     def _job_dir(self, job_id: str) -> Path:
@@ -110,10 +137,21 @@ class JobManager:
             if status:
                 jobs.append(status)
         jobs.sort(key=lambda j: j.get("created_at") or "", reverse=True)
-        return jobs
+        return jobs[:MAX_HISTORY]
 
     def get_job(self, job_id: str) -> dict | None:
         return _read_json(self._job_dir(job_id) / "job.json")
+
+    # ----- deletion ---------------------------------------------------------
+    def delete_job(self, job_id: str) -> str:
+        """Delete a job's working directory. Returns 'deleted', 'running', or 'not_found'."""
+        job_dir = self._job_dir(job_id)
+        if not job_dir.exists():
+            return "not_found"
+        if self._current == job_id:
+            return "running"
+        shutil.rmtree(job_dir)
+        return "deleted"
 
     # ----- background worker loop ----------------------------------------
     async def worker_loop(self) -> None:

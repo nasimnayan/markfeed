@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Launch the Folio web UI.  Run:  python run.py   then open http://localhost:8800"""
+"""Launch the MarkFeed web UI.  Run:  python run.py   then open http://localhost:8800"""
 
 import webbrowser
 
@@ -7,7 +7,7 @@ import uvicorn
 
 if __name__ == "__main__":
     url = "http://localhost:8800"
-    print(f"\n  Folio is starting...  Open  {url}  in your browser.\n")
+    print(f"\n  MarkFeed is starting...  Open  {url}  in your browser.\n")
     try:
         webbrowser.open(url)
     except Exception:

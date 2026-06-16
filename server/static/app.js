@@ -3,12 +3,18 @@
 const $ = (id) => document.getElementById(id);
 
 let pollTimer = null;
+let activeJobId = null;
+let batchPollTimer = null;
+let batchState = null;
+
+const MAX_BATCH_FILES = 10;
 
 // ---- element refs --------------------------------------------------------
 const form = $("upload-form");
 const fileInput = $("file");
 const dropzone = $("dropzone");
 const dzText = $("dz-text");
+const selectedFilesList = $("selected-files-list");
 const pagesField = $("pages-field");
 const pageRangeRow = $("page-range-row");
 const allPagesCb = $("all_pages");
@@ -27,35 +33,85 @@ const retryBtn = $("retry-btn");
 const resultsCard = $("results-card");
 const useLayoutCb = $("use_layout");
 
+const batchCard = $("batch-card");
+const batchList = $("batch-list");
+const batchSummary = $("batch-summary");
+const batchDownloadAll = $("batch-download-all");
+
 let pdfInfo = { page_count: null, extraction_cap: null }; // for the current file
+
+// Build a capped FileList (DataTransfer is the standard way to construct one).
+function capFileList(fileList, max) {
+  if (fileList.length <= max) return fileList;
+  const dt = new DataTransfer();
+  for (let i = 0; i < max; i++) dt.items.add(fileList[i]);
+  return dt.files;
+}
 
 // ---- file selection: dropzone label + page-range visibility --------------
 fileInput.addEventListener("change", async () => {
-  const f = fileInput.files[0];
+  let files = fileInput.files;
   pdfInfo = { page_count: null, extraction_cap: null };
-  if (!f) {
-    dzText.innerHTML = "Click to choose a <strong>.pdf</strong> or <strong>.docx</strong> file";
+
+  if (files.length > MAX_BATCH_FILES) {
+    alert(`You selected ${files.length} files — only the first ${MAX_BATCH_FILES} will be converted.`);
+    files = capFileList(files, MAX_BATCH_FILES);
+    fileInput.files = files;
+  }
+
+  if (files.length === 0) {
+    dzText.innerHTML = "Click to choose a <strong>PDF</strong>, <strong>Word</strong>, <strong>CSV</strong> or <strong>Excel</strong> file <span class=\"hint\">(up to 10 at once)</span>";
     dropzone.classList.remove("has-file");
     pagesField.style.display = "";
     $("layout-field").style.display = "";
+    hide(selectedFilesList);
+    selectedFilesList.innerHTML = "";
+    convertBtn.textContent = "Convert to Markdown";
     return;
   }
-  dzText.innerHTML = `Selected: <strong>${escapeHtml(f.name)}</strong>`;
-  dropzone.classList.add("has-file");
-  const isPdf = f.name.toLowerCase().endsWith(".pdf");
-  pagesField.style.display = isPdf ? "" : "none"; // page range only applies to PDFs
-  $("layout-field").style.display = isPdf ? "" : "none"; // extraction is PDF-only
 
-  if (isPdf) {
-    try {
-      const fd = new FormData();
-      fd.append("file", f);
-      pdfInfo = await (await fetch("/api/pdf-info", { method: "POST", body: fd })).json();
-    } catch {
-      pdfInfo = { page_count: null, extraction_cap: null };
+  dropzone.classList.add("has-file");
+
+  if (files.length === 1) {
+    const f = files[0];
+    dzText.innerHTML = `Selected: <strong>${escapeHtml(f.name)}</strong>`;
+    hide(selectedFilesList);
+    selectedFilesList.innerHTML = "";
+    convertBtn.textContent = "Convert to Markdown";
+
+    const isPdf = f.name.toLowerCase().endsWith(".pdf");
+    pagesField.style.display = isPdf ? "" : "none"; // page range only applies to PDFs
+    $("layout-field").style.display = isPdf ? "" : "none"; // extraction is PDF-only
+
+    if (isPdf) {
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        pdfInfo = await (await fetch("/api/pdf-info", { method: "POST", body: fd })).json();
+      } catch {
+        pdfInfo = { page_count: null, extraction_cap: null };
+      }
     }
+    applyLayoutCap();
+    return;
   }
-  applyLayoutCap();
+
+  // batch mode: multiple files share one set of options; convert each file in full.
+  dzText.innerHTML = `Selected: <strong>${files.length} files</strong>`;
+  selectedFilesList.innerHTML = "";
+  for (const f of files) {
+    const li = document.createElement("li");
+    li.textContent = f.name;
+    selectedFilesList.appendChild(li);
+  }
+  show(selectedFilesList);
+  convertBtn.textContent = `Convert ${files.length} files`;
+
+  // page range doesn't apply across a batch — each file converts in full
+  // (still subject to the per-file layout-mode page cap, applied server-side).
+  pagesField.style.display = "none";
+  $("layout-field").style.display = "";
+  $("layout-cap-note").classList.add("hidden");
 });
 
 // ---- extraction-mode page cap -------------------------------------------
@@ -117,7 +173,11 @@ allPagesCb.addEventListener("change", () => {
 // ---- submit --------------------------------------------------------------
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  await submitFormData(buildFormData(false));
+  if (fileInput.files.length > 1) {
+    await submitBatch();
+  } else {
+    await submitFormData(buildFormData(false));
+  }
 });
 
 function buildFormData(forceNoLayout) {
@@ -135,6 +195,8 @@ async function submitFormData(fd) {
   convertBtn.disabled = true;
   hide(errorCard);
   hide(resultsCard);
+  hide(batchCard);
+  stopBatchPolling();
   try {
     const res = await fetch("/api/jobs", { method: "POST", body: fd });
     if (!res.ok) throw new Error((await res.text()) || `Upload failed (${res.status})`);
@@ -148,11 +210,169 @@ async function submitFormData(fd) {
   }
 }
 
+// ---- batch upload ("auto mode") -------------------------------------------
+async function submitBatch() {
+  const files = Array.from(fileInput.files).slice(0, MAX_BATCH_FILES);
+  if (!files.length) return;
+
+  convertBtn.disabled = true;
+  stopPolling();
+  hide(progressCard);
+  hide(errorCard);
+  hide(resultsCard);
+
+  const batchId = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  batchState = { batchId, items: [] };
+  show(batchCard);
+  hide(batchDownloadAll);
+  batchSummary.textContent = `Uploading ${files.length} files…`;
+  renderBatchPanel();
+
+  const lang = $("lang").value;
+  const dpi = $("dpi").value;
+  const useLayout = useLayoutCb.checked ? "true" : "false";
+
+  for (const file of files) {
+    const item = { filename: file.name, jobId: null, status: "uploading", done: 0, total: 0, message: null };
+    batchState.items.push(item);
+    renderBatchPanel();
+
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("lang", lang);
+    fd.append("dpi", dpi);
+    fd.append("use_layout", useLayout);
+    fd.append("batch_id", batchId);
+
+    try {
+      const res = await fetch("/api/jobs", { method: "POST", body: fd });
+      if (!res.ok) throw new Error((await res.text()) || `Upload failed (${res.status})`);
+      const { job_id } = await res.json();
+      item.jobId = job_id;
+      item.status = "queued";
+    } catch (err) {
+      item.status = "error";
+      item.message = err.message;
+    }
+    renderBatchPanel();
+  }
+
+  convertBtn.disabled = false;
+  loadRecentJobs();
+  startBatchPolling();
+}
+
+function dotClass(status) {
+  return status === "uploading" ? "queued" : status;
+}
+
+function renderBatchPanel() {
+  if (!batchState) return;
+  batchList.innerHTML = "";
+  let doneCount = 0;
+  let terminalCount = 0;
+
+  for (const item of batchState.items) {
+    const li = document.createElement("li");
+    li.className = "batch-item";
+
+    const name = document.createElement("span");
+    name.className = "batch-item-name";
+    name.innerHTML = `<span class="r-dot ${dotClass(item.status)}"></span>${escapeHtml(item.filename)}`;
+    li.appendChild(name);
+
+    if (item.status === "error" || item.status === "crashed") {
+      const err = document.createElement("span");
+      err.className = "batch-item-error";
+      err.title = item.message || "";
+      err.textContent = item.message || "Failed";
+      li.appendChild(err);
+    } else if (item.status === "done") {
+      const view = document.createElement("button");
+      view.type = "button";
+      view.className = "batch-item-view";
+      view.textContent = "View";
+      view.addEventListener("click", () => loadResults(item.jobId, item.filename));
+      li.appendChild(view);
+    } else {
+      const prog = document.createElement("span");
+      prog.className = "batch-item-progress";
+      if (item.status === "running") {
+        prog.textContent = item.total ? `Page ${item.done} of ${item.total}` : "Running…";
+      } else if (item.status === "queued") {
+        prog.textContent = "Queued…";
+      } else {
+        prog.textContent = "Uploading…";
+      }
+      li.appendChild(prog);
+    }
+
+    batchList.appendChild(li);
+    if (item.status === "done") doneCount++;
+    if (item.status === "done" || item.status === "error" || item.status === "crashed") terminalCount++;
+  }
+
+  const total = batchState.items.length;
+  batchSummary.textContent = terminalCount === total
+    ? `${doneCount} of ${total} converted successfully.`
+    : `${terminalCount} of ${total} finished…`;
+
+  if (terminalCount === total && doneCount > 0) {
+    batchDownloadAll.href = `/api/batch/${batchState.batchId}/download`;
+    show(batchDownloadAll);
+  } else {
+    hide(batchDownloadAll);
+  }
+}
+
+function startBatchPolling() {
+  stopBatchPolling();
+  batchPollTimer = setInterval(pollBatch, 1500);
+  pollBatch();
+}
+
+function stopBatchPolling() {
+  if (batchPollTimer) clearInterval(batchPollTimer);
+  batchPollTimer = null;
+}
+
+async function pollBatch() {
+  if (!batchState) { stopBatchPolling(); return; }
+  let allTerminal = true;
+
+  for (const item of batchState.items) {
+    if (item.status === "done" || item.status === "error" || item.status === "crashed") continue;
+    if (!item.jobId) continue;
+    allTerminal = false;
+    try {
+      const res = await fetch(`/api/jobs/${item.jobId}`);
+      if (res.ok) {
+        const s = await res.json();
+        item.status = s.status;
+        item.done = s.done;
+        item.total = s.total;
+        item.message = s.message;
+      }
+    } catch { /* keep previous status, retry next tick */ }
+  }
+
+  renderBatchPanel();
+  if (allTerminal) {
+    stopBatchPolling();
+    loadRecentJobs();
+  }
+}
+
 // ---- polling -------------------------------------------------------------
 function startPolling(jobId) {
+  activeJobId = jobId;
+  liveFollow = true;
+  cmp.live = false;
   show(progressCard);
   hide(errorCard);
   hide(resultsCard);
+  hide(batchCard);
+  stopBatchPolling();
   progressFill.style.width = "0%";
   progressText.textContent = "Queued…";
   if (pollTimer) clearInterval(pollTimer);
@@ -177,6 +397,9 @@ async function pollStatus(jobId) {
     progressText.textContent = s.status === "queued"
       ? "Waiting for an earlier job to finish…"
       : `Page ${s.done} of ${s.total}  ·  ${pct}%`;
+    if (s.status === "running" && s.file_type === "pdf" && s.done > 0) {
+      updateLiveCompare(jobId);
+    }
   } else if (s.status === "done") {
     stopPolling();
     progressFill.style.width = "100%";
@@ -211,6 +434,8 @@ retryBtn.addEventListener("click", async () => {
 
 // ---- results -------------------------------------------------------------
 async function loadResults(jobId, filename) {
+  activeJobId = jobId;
+  exitLiveMode();
   show(resultsCard);
   $("results-title").textContent = filename ? `Result — ${filename}` : "Result";
 
@@ -232,7 +457,58 @@ async function loadResults(jobId, filename) {
 }
 
 // ---- compare & verify ----------------------------------------------------
-let cmp = { jobId: null, pages: [], idx: 0, mode: "rendered" };
+let cmp = { jobId: null, pages: [], idx: 0, mode: "rendered", live: false };
+let liveFollow = true; // auto-jump to the newest page until the user navigates back
+
+// Live, during-conversion compare: poll the pages finished so far and show the
+// newest one side-by-side with its original scan.
+async function updateLiveCompare(jobId) {
+  let data;
+  try {
+    data = await (await fetch(`/api/jobs/${jobId}/live`)).json();
+  } catch {
+    return;
+  }
+  const pages = data.pages || [];
+  if (!pages.length) return;
+
+  enterLiveMode();
+  cmp.jobId = jobId;
+  cmp.pages = pages;
+  cmp.mode = cmp.mode || "rendered";
+  $("cmp-total").textContent = pages.length;
+  $("cmp-page-input").max = pages.length;
+
+  if (liveFollow || cmp.idx >= pages.length) {
+    showComparePage(pages.length - 1);
+  }
+}
+
+function setSecondaryTabs(visible) {
+  // During live conversion only the compare tab is meaningful; the full preview,
+  // stats and download are only ready once the whole document finishes.
+  ["preview", "stats", "download"].forEach((name) => {
+    const btn = document.querySelector(`.tab[data-tab="${name}"]`);
+    if (btn) btn.classList.toggle("hidden", !visible);
+  });
+}
+
+function enterLiveMode() {
+  if (cmp.live) return;
+  cmp.live = true;
+  show(resultsCard);
+  $("results-title").textContent = "Converting… live preview";
+  $("compare-tab-btn").classList.remove("hidden");
+  $("live-banner").classList.remove("hidden");
+  setSecondaryTabs(false);
+  activateTab("compare");
+}
+
+function exitLiveMode() {
+  cmp.live = false;
+  $("live-banner").classList.add("hidden");
+  setSecondaryTabs(true);
+}
 
 async function loadCompare(jobId) {
   cmp = { jobId, pages: [], idx: 0, mode: cmp.mode || "rendered" };
@@ -283,11 +559,17 @@ function setCompareMode(mode) {
   $("cmp-rawtext").classList.toggle("hidden", mode !== "raw");
 }
 
-$("cmp-prev").addEventListener("click", () => showComparePage(cmp.idx - 1));
-$("cmp-next").addEventListener("click", () => showComparePage(cmp.idx + 1));
+// In live mode, navigating to the newest page resumes auto-follow; going back
+// pauses it so the page doesn't jump out from under the user mid-read.
+function liveNavTo(idx) {
+  if (cmp.live) liveFollow = idx >= cmp.pages.length - 1;
+  showComparePage(idx);
+}
+$("cmp-prev").addEventListener("click", () => liveNavTo(cmp.idx - 1));
+$("cmp-next").addEventListener("click", () => liveNavTo(cmp.idx + 1));
 $("cmp-page-input").addEventListener("change", () => {
   const n = parseInt($("cmp-page-input").value, 10);
-  if (!isNaN(n)) showComparePage(Math.min(Math.max(1, n), cmp.pages.length) - 1);
+  if (!isNaN(n)) liveNavTo(Math.min(Math.max(1, n), cmp.pages.length) - 1);
 });
 $("cmp-rendered").addEventListener("click", () => setCompareMode("rendered"));
 $("cmp-raw").addEventListener("click", () => setCompareMode("raw"));
@@ -298,7 +580,7 @@ function renderStats(stats) {
   const rows = stats.rows || [];
 
   let html = '<div class="stats-wrap"><table class="stats-table"><thead><tr>';
-  html += `<th>${labelCol === "page" ? "Page" : "Section"}</th><th>Source</th>`;
+  html += `<th>${labelCol === "page" ? "Page" : "Section / Sheet"}</th><th>Source</th>`;
   for (const c of cols) html += `<th>${prettyCol(c)}</th>`;
   html += "</tr></thead><tbody>";
   for (const row of rows) {
@@ -336,18 +618,46 @@ async function loadRecentJobs() {
   const list = $("recent-list");
   list.innerHTML = "";
   $("recent-empty").style.display = jobs.length ? "none" : "";
-  for (const j of jobs.slice(0, 40)) {
+  for (const j of jobs.slice(0, 10)) {
     const li = document.createElement("li");
     li.innerHTML =
+      `<button type="button" class="r-delete" title="Delete this conversion">&times;</button>` +
       `<span class="r-name"><span class="r-dot ${j.status}"></span>${escapeHtml(j.filename || j.job_id)}</span>` +
       `<span class="r-meta">${j.status} · ${(j.created_at || "").replace("T", " ")}</span>`;
     li.addEventListener("click", () => openJob(j));
+    li.querySelector(".r-delete").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteJob(j.job_id);
+    });
     list.appendChild(li);
   }
 }
 
+async function deleteJob(jobId) {
+  if (!confirm("Delete this conversion and its files? This can't be undone.")) return;
+  try {
+    const res = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || "Could not delete this job.");
+      return;
+    }
+  } catch {
+    alert("Could not delete this job.");
+    return;
+  }
+  if (activeJobId === jobId) {
+    stopPolling();
+    hide(progressCard); hide(resultsCard); hide(errorCard);
+    activeJobId = null;
+  }
+  loadRecentJobs();
+}
+
 function openJob(j) {
   stopPolling();
+  stopBatchPolling();
+  hide(batchCard);
   document.querySelectorAll(".recent-list li").forEach((li) => li.classList.remove("active"));
   if (j.status === "done") {
     hide(progressCard); hide(errorCard);

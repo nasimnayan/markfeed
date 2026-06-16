@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
-app = FastAPI(title="Folio", lifespan=lifespan)
+app = FastAPI(title="MarkFeed", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -60,10 +60,11 @@ async def create_job(
     use_layout: bool = Form(False),
     start_page: int | None = Form(None),
     end_page: int | None = Form(None),
+    batch_id: str | None = Form(None),
 ):
     suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in (".pdf", ".docx"):
-        raise HTTPException(400, "Only .pdf and .docx files are supported")
+    if suffix not in (".pdf", ".docx", ".csv", ".xls", ".xlsx"):
+        raise HTTPException(400, "Only PDF, Word, CSV and Excel files are supported")
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(400, "Uploaded file is empty")
@@ -88,12 +89,13 @@ async def create_job(
         file.filename or f"upload{suffix}",
         file_bytes,
         {
-            "file_type": "pdf" if suffix == ".pdf" else "docx",
+            "file_type": suffix.lstrip("."),  # pdf / docx / csv / xls / xlsx
             "lang": lang,
             "dpi": dpi,
             "use_layout": use_layout,
             "start_page": start,
             "end_page": end,
+            "batch_id": batch_id,
         },
     )
     return {"job_id": job_id}
@@ -125,6 +127,16 @@ def job_status(job_id: str):
     if status is None:
         raise HTTPException(404, "Job not found")
     return status
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str):
+    result = job_manager.delete_job(job_id)
+    if result == "not_found":
+        raise HTTPException(404, "Job not found")
+    if result == "running":
+        raise HTTPException(409, "Cannot delete a job that is currently running")
+    return {"deleted": job_id}
 
 
 def _require_done(job_id: str) -> Path:
@@ -220,12 +232,44 @@ def job_compare(job_id: str):
     return {"pages": pages}
 
 
+@app.get("/api/jobs/{job_id}/live")
+def job_live(job_id: str):
+    """Pages converted so far (works while the job is still running).
+
+    Powers the live, during-conversion compare view. Unlike /compare it does not
+    require the whole document to be finished — it reads live.json, which the
+    worker rewrites after every page.
+    """
+    job_dir = job_manager._job_dir(job_id)
+    if not job_dir.exists():
+        raise HTTPException(404, "Job not found")
+    import json
+
+    live_path = job_dir / "live.json"
+    try:
+        live = json.loads(live_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        live = {"pages": []}
+    pages = [p for p in live.get("pages", []) if p.get("preview")]
+    return {"pages": pages}
+
+
 @app.get("/api/jobs/{job_id}/page/{page}")
 def job_page(job_id: str, page: int):
-    """Rendered HTML + raw text for a single page (lazy-loaded by the viewer)."""
-    job_dir = _require_done(job_id)
-    text = (job_dir / "converted.md").read_text(encoding="utf-8")
-    chunk = _split_pages(text).get(page, "")
+    """Rendered HTML + raw text for a single page (lazy-loaded by the viewer).
+
+    Works both after completion (reads the combined converted.md) and mid-run
+    (falls back to the per-page file the worker writes for the live compare view).
+    """
+    job_dir = job_manager._job_dir(job_id)
+    combined = job_dir / "converted.md"
+    if combined.exists():
+        chunk = _split_pages(combined.read_text(encoding="utf-8")).get(page, "")
+    else:
+        per_page = job_dir / "pages" / f"{page}.md"
+        if not per_page.exists():
+            raise HTTPException(404, "Page not ready")
+        chunk = _PAGE_SPLIT_RE.sub("", per_page.read_text(encoding="utf-8")).strip()
     html = md_lib.markdown(chunk, extensions=["tables", "fenced_code", "sane_lists", "nl2br"])
     html = re.sub(r'(<img[^>]*\bsrc=")images/', rf'\1/api/jobs/{job_id}/images/', html)
     return {"html": html, "raw": chunk}
@@ -250,4 +294,38 @@ def job_download(job_id: str):
         buf,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{stem}_markdown.zip"'},
+    )
+
+
+@app.get("/api/batch/{batch_id}/download")
+def batch_download(batch_id: str):
+    matches = []
+    for job_dir in job_manager.jobs_root.iterdir():
+        if not job_dir.is_dir():
+            continue
+        job = job_manager.get_job(job_dir.name)
+        if job and job.get("batch_id") == batch_id and (job_dir / "converted.md").exists():
+            matches.append(job)
+    if not matches:
+        raise HTTPException(404, "No completed files found for this batch")
+
+    matches.sort(key=lambda j: j.get("created_at") or "")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for idx, job in enumerate(matches, start=1):
+            job_dir = job_manager._job_dir(job["job_id"])
+            stem = Path(job.get("filename", "converted")).stem
+            folder = f"{idx:02d}_{stem}"
+            zf.write(job_dir / "converted.md", arcname=f"{folder}/converted.md")
+            images_dir = job_dir / "images"
+            if images_dir.exists():
+                for img in sorted(images_dir.glob("*")):
+                    if img.is_file():
+                        zf.write(img, arcname=f"{folder}/images/{img.name}")
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="batch_{batch_id}.zip"'},
     )
