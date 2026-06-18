@@ -7,194 +7,325 @@
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%237c8cff'/%3E%3Cpath d='M5 17V8l3.5 4L12 8v9' fill='none' stroke='white' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round'/%3E%3Cpath d='M15 9v5m0 0l-2-2m2 2l2-2' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
-<body>
-  <header class="topbar">
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
-        <rect width="24" height="24" rx="6" fill="url(#g)"></rect>
-        <path d="M5 17V8l3.6 4.4L12.2 8v9" fill="none" stroke="#fff" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"></path>
-        <path d="M16 8.5v6m0 0l-2.2-2.2M16 14.5l2.2-2.2" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path>
-        <defs>
-          <linearGradient id="g" x1="0" y1="0" x2="24" y2="24">
-            <stop stop-color="#7c8cff"></stop><stop offset="1" stop-color="#a06bff"></stop>
-          </linearGradient>
-        </defs>
-      </svg>
-      <div class="brand-text">
-        <span class="brand-name">MarkFeed</span>
-        <span class="brand-tag">Scanned PDF · Digital PDF · Word · Excel → clean Markdown</span>
-      </div>
-    </div>
-    <span class="offline-pill">● Fully offline · no AI · no cloud</span>
-  </header>
-
-  <div class="layout">
+<body class="plan-free">
+  <div class="app">
+    <!-- ===================== Sidebar ===================== -->
     <aside class="sidebar">
-      <h2>Recent conversions</h2>
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+          <rect width="24" height="24" rx="6" fill="url(#g)"></rect>
+          <path d="M5 17V8l3.6 4.4L12.2 8v9" fill="none" stroke="#fff" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"></path>
+          <path d="M16 8.5v6m0 0l-2.2-2.2M16 14.5l2.2-2.2" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path>
+          <defs>
+            <linearGradient id="g" x1="0" y1="0" x2="24" y2="24">
+              <stop stop-color="#7c8cff"></stop><stop offset="1" stop-color="#a06bff"></stop>
+            </linearGradient>
+          </defs>
+        </svg>
+        <span class="brand-name">MarkFeed</span>
+      </div>
+
+      <h2>Recent Conversions</h2>
       <ul id="recent-list" class="recent-list"></ul>
       <p id="recent-empty" class="muted small">Your converted documents will appear here.</p>
+
+      <div class="sidebar-foot">
+        <span class="offline-pill">● Fully offline · no AI · no cloud</span>
+      </div>
     </aside>
 
-    <main class="content">
-      <!-- Upload form -->
-      <section class="card" id="upload-card">
-        <h2>Convert a document</h2>
-        <p class="muted small card-sub">Upload a scanned book, a normal PDF, a Word file, or a spreadsheet (CSV / Excel). MarkFeed extracts the text, images and tables into Markdown.</p>
-        <form id="upload-form">
-          <div class="field">
-            <label for="file">Document</label>
+    <!-- ===================== Main ===================== -->
+    <main class="main">
+      <header class="main-top">
+        <div class="plan-toggle" id="plan-toggle" role="group" aria-label="Plan">
+          <button type="button" class="plan-opt active" data-plan="free">Free</button>
+          <button type="button" class="plan-opt" data-plan="premium">Advanced <span class="spark">✦</span></button>
+        </div>
+        <div class="top-actions">
+          <button type="button" class="icon-btn" id="theme-btn" title="Theme" aria-label="Theme">
+            <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="settings-btn" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2v3m0 14v3m10-10h-3M5 12H2m15.5-6.5l-2 2m-7 7l-2 2m11 0l-2-2m-7-7l-2-2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="scroll-area">
+        <!-- Upload form -->
+        <section class="card" id="upload-card">
+          <div class="hero">
+            <h1 class="hero-title"><span class="grad">Convert</span> Documents into<br /><span class="grad">Clean Knowledge</span></h1>
+            <p class="hero-sub">Scanned books, PDFs, Word, spreadsheets or images → clean Markdown. Bengali + English OCR, tables and figures included.</p>
+          </div>
+
+          <form id="upload-form">
+            <!-- Upload zone -->
             <label class="dropzone" id="dropzone" for="file">
               <svg viewBox="0 0 24 24" class="dz-icon"><path d="M12 16V4m0 0L8 8m4-4l4 4M5 20h14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              <span id="dz-text">Click to choose a <strong>PDF</strong>, <strong>Word</strong>, <strong>CSV</strong> or <strong>Excel</strong> file <span class="hint">(up to 10 at once)</span></span>
+              <span id="dz-text">Drag &amp; drop files here or <strong>click to upload</strong> <span class="hint">(up to 10 at once)</span></span>
+              <div class="format-chips">
+                <span>.pdf</span><span>.docx</span><span>.csv</span><span>.xls</span><span>.xlsx</span><span>.png</span><span>.jpg</span><span>.webp</span><span>.tiff</span>
+              </div>
             </label>
-            <input type="file" id="file" name="file" accept=".pdf,.docx,.csv,.xls,.xlsx" required hidden multiple />
-            <div class="format-chips">
-              <span>.pdf</span><span>.docx</span><span>.csv</span><span>.xls</span><span>.xlsx</span>
-            </div>
+            <input type="file" id="file" name="file" accept=".pdf,.docx,.csv,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.gif" required hidden multiple />
             <ul id="selected-files-list" class="selected-files hidden"></ul>
-          </div>
 
-          <div class="row">
-            <div class="field">
-              <label for="lang">OCR language <span class="hint">(scanned pages only)</span></label>
-              <select id="lang" name="lang">
-                <option value="ben+eng">Bengali + English</option>
-                <option value="eng">English</option>
-                <option value="ben">Bengali</option>
-              </select>
-              <p class="help">Language MarkFeed uses to read scanned text. Pick the one that matches your document.</p>
+            <!-- Presets -->
+            <h3 class="section-label">Preset</h3>
+            <select id="preset" name="preset" class="visually-hidden" tabindex="-1" aria-hidden="true">
+              <option value="">Custom</option>
+              <option value="standard">Standard OCR</option>
+              <option value="research">Research Report</option>
+              <option value="policy">Policy Document</option>
+              <option value="meeting">Meeting Minutes</option>
+            </select>
+            <div class="preset-grid" id="preset-grid">
+              <button type="button" class="preset-card" data-preset="research">
+                <span class="preset-ico ico-a"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+                <span class="preset-text">
+                  <span class="preset-head">
+                    <span class="preset-name">Research Report</span>
+                    <span class="preset-badge">Advanced ✦</span>
+                  </span>
+                  <span class="preset-desc">Layout + tables + searchable PDF for papers.</span>
+                </span>
+              </button>
+              <button type="button" class="preset-card" data-preset="policy">
+                <span class="preset-ico ico-b"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5M9 13h6M9 16h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+                <span class="preset-text">
+                  <span class="preset-head">
+                    <span class="preset-name">Policy Document</span>
+                    <span class="preset-badge">Advanced ✦</span>
+                  </span>
+                  <span class="preset-desc">Layout + a linked table of contents.</span>
+                </span>
+              </button>
+              <button type="button" class="preset-card" data-preset="meeting">
+                <span class="preset-ico ico-c"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                <span class="preset-text">
+                  <span class="preset-head">
+                    <span class="preset-name">Meeting Minutes</span>
+                    <span class="preset-badge">Advanced ✦</span>
+                  </span>
+                  <span class="preset-desc">Layout + headings outline for notes.</span>
+                </span>
+              </button>
+              <button type="button" class="preset-card" data-preset="standard">
+                <span class="preset-ico ico-d"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                <span class="preset-text">
+                  <span class="preset-head">
+                    <span class="preset-name">Standard OCR</span>
+                  </span>
+                  <span class="preset-desc">Fast plain-text OCR of the whole page.</span>
+                </span>
+              </button>
             </div>
-            <div class="field">
-              <label for="dpi">Scan quality (Render DPI)</label>
-              <select id="dpi" name="dpi">
-                <option value="200">200 — Fast, lower quality</option>
-                <option value="300" selected>300 — Recommended</option>
-                <option value="400">400 — Sharper, slower</option>
-              </select>
-              <p class="help">How sharply each scanned page is rendered before reading. Higher = better accuracy but slower. 300 suits most books.</p>
-            </div>
-          </div>
 
-          <div class="field checkbox-field" id="layout-field">
-            <label class="checkbox-inline">
-              <input type="checkbox" id="use_layout" name="use_layout" />
-              Extract diagrams &amp; tables <span class="hint">(slower)</span>
-            </label>
-            <p class="help" id="layout-help">Off: fast plain-text OCR of the whole page. On: detects figures, tables and headings and converts them into Markdown images and tables — best for pages with diagrams or data tables. Slower per page.</p>
-            <p class="warn hidden" id="layout-cap-note"></p>
-          </div>
-
-          <div class="field" id="pages-field">
-            <label class="checkbox-inline">
-              <input type="checkbox" id="all_pages" name="all_pages" checked />
-              Convert all pages
-            </label>
-            <p class="help" id="all-pages-help">All pages will be converted. Uncheck to pick a page range (useful to test a few pages of a long book first).</p>
-            <div class="row hidden" id="page-range-row">
-              <div class="field">
-                <label for="start_page">Start page</label>
-                <input type="number" id="start_page" name="start_page" min="1" placeholder="1" />
+            <!-- OCR Options -->
+            <h3 class="section-label">OCR Options</h3>
+            <div class="options-grid">
+              <div class="opt-card">
+                <label for="lang">OCR language <span class="hint">(scanned only)</span></label>
+                <select id="lang" name="lang">
+                  <option value="ben+eng">Bengali + English</option>
+                  <option value="eng">English</option>
+                  <option value="ben">Bengali</option>
+                </select>
               </div>
-              <div class="field">
-                <label for="end_page">End page</label>
-                <input type="number" id="end_page" name="end_page" min="1" placeholder="(last)" />
+
+              <div class="opt-card">
+                <label for="dpi">Scan quality <span class="hint">(render DPI)</span></label>
+                <select id="dpi" name="dpi">
+                  <option value="200">200 — Fast, lower quality</option>
+                  <option value="300" selected>300 — Recommended</option>
+                  <option value="400">400 — Sharper, slower</option>
+                </select>
+              </div>
+
+              <div class="opt-card opt-toggle" id="layout-field" data-premium>
+                <div class="opt-toggle-head">
+                  <span class="opt-title">Extract diagrams &amp; tables <span class="premium-badge">Advanced ✦</span></span>
+                  <label class="switch"><input type="checkbox" id="use_layout" name="use_layout" /><span class="slider"></span></label>
+                </div>
+                <p class="opt-desc">Detects figures, tables and headings into Markdown. Slower per page.</p>
+                <p class="warn hidden" id="layout-cap-note"></p>
+              </div>
+
+              <div class="opt-card opt-toggle" id="preprocess-field">
+                <div class="opt-toggle-head">
+                  <span class="opt-title">Enhance scan quality</span>
+                  <label class="switch"><input type="checkbox" id="preprocess" name="preprocess" checked /><span class="slider"></span></label>
+                </div>
+                <p class="opt-desc">Deskew, denoise and boost contrast before OCR.</p>
+              </div>
+
+              <div class="opt-card opt-toggle" id="searchable-field" data-premium>
+                <div class="opt-toggle-head">
+                  <span class="opt-title">Searchable PDF <span class="premium-badge">Advanced ✦</span></span>
+                  <label class="switch"><input type="checkbox" id="make_searchable" name="make_searchable" /><span class="slider"></span></label>
+                </div>
+                <p class="opt-desc">Original pages with an invisible, selectable text layer.</p>
+              </div>
+
+              <div class="opt-card opt-toggle" id="toc-field">
+                <div class="opt-toggle-head">
+                  <span class="opt-title">Table of contents</span>
+                  <label class="switch"><input type="checkbox" id="gen_toc" name="gen_toc" /><span class="slider"></span></label>
+                </div>
+                <p class="opt-desc">Linked “Contents” outline built from detected headings.</p>
+              </div>
+
+              <div class="opt-card opt-toggle" id="pages-field">
+                <div class="opt-toggle-head">
+                  <span class="opt-title">Convert all pages</span>
+                  <label class="switch"><input type="checkbox" id="all_pages" name="all_pages" checked /><span class="slider"></span></label>
+                </div>
+                <p class="opt-desc" id="all-pages-help">Turn off to convert a page range only.</p>
+                <div class="row hidden" id="page-range-row">
+                  <div class="field">
+                    <label for="start_page">Start page</label>
+                    <input type="number" id="start_page" name="start_page" min="1" placeholder="1" />
+                  </div>
+                  <div class="field">
+                    <label for="end_page">End page</label>
+                    <input type="number" id="end_page" name="end_page" min="1" placeholder="(last)" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" id="convert-btn" class="primary big">Convert to Markdown</button>
+          </form>
+        </section>
+
+        <!-- Progress -->
+        <section class="card hidden" id="progress-card">
+          <h2>Converting…</h2>
+          <div class="progress-meta">
+            <span id="progress-filename" class="strong"></span>
+            <span id="progress-status" class="badge"></span>
+          </div>
+          <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+          <p id="progress-text" class="muted"></p>
+        </section>
+
+        <!-- Batch progress -->
+        <section class="card hidden" id="batch-card">
+          <div class="results-head">
+            <h2>Converting batch…</h2>
+            <a id="batch-download-all" class="primary hidden" download>⬇ Download all (.zip)</a>
+          </div>
+          <p id="batch-summary" class="muted small"></p>
+          <ul id="batch-list" class="batch-list"></ul>
+        </section>
+
+        <!-- Error -->
+        <section class="card error-card hidden" id="error-card">
+          <h2>Conversion failed</h2>
+          <p id="error-message"></p>
+          <button id="retry-btn" class="primary hidden">Retry without layout mode</button>
+        </section>
+
+        <!-- Results -->
+        <section class="card hidden" id="results-card">
+          <div class="results-head">
+            <h2 id="results-title">Result</h2>
+            <a id="download-zip-top" class="primary" download>⬇ Download (.zip)</a>
+          </div>
+          <div class="tabs">
+            <button class="tab active" data-tab="preview"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>Preview</button>
+            <button class="tab hidden" data-tab="compare" id="compare-tab-btn"><svg viewBox="0 0 24 24"><path d="M12 4v16M5 7h4M5 11h4M15 7h4M15 11h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>Compare</button>
+            <button class="tab" data-tab="download"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-3.5-3.5M12 14l3.5-3.5M5 19h14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Downloads</button>
+            <button class="tab" data-tab="stats"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Statistics</button>
+          </div>
+
+          <div class="tab-panel active" id="tab-preview">
+            <div id="preview-content" class="markdown-body"></div>
+          </div>
+
+          <div class="tab-panel" id="tab-compare">
+            <p class="live-banner hidden" id="live-banner">● Converting live — pages appear here the moment each one is read. Following the newest page; use ◀ to look back.</p>
+            <div class="compare-toolbar">
+              <div class="compare-nav">
+                <button id="cmp-prev" class="nav-btn" title="Previous page">◀</button>
+                <span class="cmp-pageinfo">Page
+                  <input type="number" id="cmp-page-input" min="1" value="1" /> /
+                  <span id="cmp-total">1</span>
+                </span>
+                <button id="cmp-next" class="nav-btn" title="Next page">▶</button>
+              </div>
+              <div class="compare-modes">
+                <span id="cmp-conf-badge" class="conf-badge hidden"></span>
+                <label class="sync-toggle"><input type="checkbox" id="cmp-sync" /><span>Sync scroll</span></label>
+                <span class="modes-sep"></span>
+                <span class="muted small">Right side:</span>
+                <button class="mode-btn active" id="cmp-rendered" data-mode="rendered">Rendered</button>
+                <button class="mode-btn" id="cmp-raw" data-mode="raw">Raw text</button>
+                <button class="mode-btn hidden" id="cmp-conf" data-mode="conf" data-premium>Confidence</button>
+              </div>
+            </div>
+            <div class="compare-grid">
+              <div class="compare-col">
+                <div class="compare-col-head">Original page (what was scanned)</div>
+                <div class="compare-img-wrap"><img id="cmp-img" alt="Original page" /></div>
+              </div>
+              <div class="compare-col">
+                <div class="compare-col-head">Converted Markdown</div>
+                <div id="cmp-md" class="markdown-body compare-text"></div>
+                <pre id="cmp-rawtext" class="compare-text raw-text hidden"></pre>
+                <div id="cmp-confhtml" class="compare-text raw-text conf-text hidden"></div>
               </div>
             </div>
           </div>
 
-          <button type="submit" id="convert-btn" class="primary big">Convert to Markdown</button>
-        </form>
-      </section>
-
-      <!-- Progress -->
-      <section class="card hidden" id="progress-card">
-        <h2>Converting…</h2>
-        <div class="progress-meta">
-          <span id="progress-filename" class="strong"></span>
-          <span id="progress-status" class="badge"></span>
-        </div>
-        <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
-        <p id="progress-text" class="muted"></p>
-      </section>
-
-      <!-- Batch progress -->
-      <section class="card hidden" id="batch-card">
-        <div class="results-head">
-          <h2>Converting batch…</h2>
-          <a id="batch-download-all" class="primary hidden" download>⬇ Download all (.zip)</a>
-        </div>
-        <p id="batch-summary" class="muted small"></p>
-        <ul id="batch-list" class="batch-list"></ul>
-      </section>
-
-      <!-- Error -->
-      <section class="card error-card hidden" id="error-card">
-        <h2>Conversion failed</h2>
-        <p id="error-message"></p>
-        <button id="retry-btn" class="primary hidden">Retry without layout mode</button>
-      </section>
-
-      <!-- Results -->
-      <section class="card hidden" id="results-card">
-        <div class="results-head">
-          <h2 id="results-title">Result</h2>
-          <a id="download-zip-top" class="primary" download>⬇ Download (.zip)</a>
-        </div>
-        <div class="tabs">
-          <button class="tab active" data-tab="preview">Preview</button>
-          <button class="tab hidden" data-tab="compare" id="compare-tab-btn">Compare &amp; verify</button>
-          <button class="tab" data-tab="stats">Stats</button>
-          <button class="tab" data-tab="download">Download</button>
-        </div>
-
-        <div class="tab-panel active" id="tab-preview">
-          <div id="preview-content" class="markdown-body"></div>
-        </div>
-
-        <div class="tab-panel" id="tab-compare">
-          <p class="live-banner hidden" id="live-banner">● Converting live — pages appear here the moment each one is read. Following the newest page; use ◀ to look back.</p>
-          <div class="compare-toolbar">
-            <div class="compare-nav">
-              <button id="cmp-prev" class="nav-btn" title="Previous page">◀</button>
-              <span class="cmp-pageinfo">Page
-                <input type="number" id="cmp-page-input" min="1" value="1" /> /
-                <span id="cmp-total">1</span>
-              </span>
-              <button id="cmp-next" class="nav-btn" title="Next page">▶</button>
-            </div>
-            <div class="compare-modes">
-              <span class="muted small">Right side:</span>
-              <button class="mode-btn active" id="cmp-rendered" data-mode="rendered">Rendered</button>
-              <button class="mode-btn" id="cmp-raw" data-mode="raw">Raw text</button>
-            </div>
+          <div class="tab-panel" id="tab-stats">
+            <div id="stats-content"></div>
           </div>
-          <div class="compare-grid">
-            <div class="compare-col">
-              <div class="compare-col-head">Original page (what was scanned)</div>
-              <div class="compare-img-wrap"><img id="cmp-img" alt="Original page" /></div>
-            </div>
-            <div class="compare-col">
-              <div class="compare-col-head">Converted Markdown</div>
-              <div id="cmp-md" class="markdown-body compare-text"></div>
-              <pre id="cmp-rawtext" class="compare-text raw-text hidden"></pre>
-            </div>
-          </div>
-        </div>
 
-        <div class="tab-panel" id="tab-stats">
-          <div id="stats-content"></div>
-        </div>
-
-        <div class="tab-panel" id="tab-download">
-          <p class="muted">Save the converted document:</p>
-          <div class="download-buttons">
-            <a id="download-md" class="primary" download>Markdown (.md)</a>
-            <a id="download-zip" class="ghost" download>Markdown + images (.zip)</a>
+          <div class="tab-panel" id="tab-download">
+            <h3 class="section-label">Downloads</h3>
+            <div class="download-cards">
+              <div class="dl-card">
+                <span class="dl-ico ico-a"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5M9 13l1.5 4 1.5-3 1.5 3 1.5-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
+                <div class="dl-body">
+                  <h4>Markdown (.md)</h4>
+                  <p>Clean Markdown text only.</p>
+                </div>
+                <a id="download-md" class="dl-btn" download>Download ⬇</a>
+              </div>
+              <div class="dl-card">
+                <span class="dl-ico ico-b"><svg viewBox="0 0 24 24"><path d="M4 7l8-4 8 4v10l-8 4-8-4z M4 7l8 4 8-4 M12 11v10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+                <div class="dl-body">
+                  <h4>Markdown ZIP</h4>
+                  <p>Clean Markdown plus extracted images.</p>
+                </div>
+                <a id="download-zip" class="dl-btn" download>Download ⬇</a>
+              </div>
+              <div class="dl-card" data-premium>
+                <span class="dl-ico ico-d"><svg viewBox="0 0 24 24"><path d="M9 4H7a2 2 0 0 0-2 2v3a2 2 0 0 1-2 2 2 2 0 0 1 2 2v3a2 2 0 0 0 2 2h2M15 4h2a2 2 0 0 1 2 2v3a2 2 0 0 0 2 2 2 2 0 0 0-2 2v3a2 2 0 0 1-2 2h-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <div class="dl-body">
+                  <h4>Chunked JSON</h4>
+                  <p>Structured data for AI knowledge bases.</p>
+                </div>
+                <a id="download-chunks" class="dl-btn" download>Download ⬇</a>
+              </div>
+              <div class="dl-card hidden" id="searchable-card">
+                <span class="dl-ico ico-c"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="11" cy="14" r="2.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M13 16l2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+                <div class="dl-body">
+                  <h4>Searchable PDF</h4>
+                  <p>PDF with an invisible, selectable text layer.</p>
+                </div>
+                <a id="download-searchable" class="dl-btn" download>Download ⬇</a>
+              </div>
+            </div>
+            <details class="raw-md-details">
+              <summary>Raw Markdown</summary>
+              <textarea id="raw-md" class="raw-md" readonly></textarea>
+            </details>
           </div>
-          <h3>Raw Markdown</h3>
-          <textarea id="raw-md" class="raw-md" readonly></textarea>
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   </div>
 

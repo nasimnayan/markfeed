@@ -9,6 +9,8 @@ pymupdf
 pymupdf4llm
 pytesseract
 pillow
+opencv-python-headless
+numpy
 pandas
 tabulate
 openpyxl

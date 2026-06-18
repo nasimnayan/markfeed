@@ -8,6 +8,8 @@ let batchPollTimer = null;
 let batchState = null;
 
 const MAX_BATCH_FILES = 10;
+const IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"];
+const isImageName = (name) => IMAGE_EXTS.some((ext) => name.toLowerCase().endsWith(ext));
 
 // ---- element refs --------------------------------------------------------
 const form = $("upload-form");
@@ -60,10 +62,12 @@ fileInput.addEventListener("change", async () => {
   }
 
   if (files.length === 0) {
-    dzText.innerHTML = "Click to choose a <strong>PDF</strong>, <strong>Word</strong>, <strong>CSV</strong> or <strong>Excel</strong> file <span class=\"hint\">(up to 10 at once)</span>";
+    dzText.innerHTML = "Drag &amp; drop files here or <strong>click to upload</strong> <span class=\"hint\">(up to 10 at once)</span>";
     dropzone.classList.remove("has-file");
     pagesField.style.display = "";
     $("layout-field").style.display = "";
+    $("preprocess-field").style.display = "";
+    $("searchable-field").style.display = "";
     hide(selectedFilesList);
     selectedFilesList.innerHTML = "";
     convertBtn.textContent = "Convert to Markdown";
@@ -80,8 +84,13 @@ fileInput.addEventListener("change", async () => {
     convertBtn.textContent = "Convert to Markdown";
 
     const isPdf = f.name.toLowerCase().endsWith(".pdf");
+    const isImage = isImageName(f.name);
     pagesField.style.display = isPdf ? "" : "none"; // page range only applies to PDFs
-    $("layout-field").style.display = isPdf ? "" : "none"; // extraction is PDF-only
+    // Layout / OCR extraction and scan enhancement apply to scanned PDFs and to
+    // images (both go through OCR); they're meaningless for docx/csv/excel.
+    $("layout-field").style.display = (isPdf || isImage) ? "" : "none";
+    $("preprocess-field").style.display = (isPdf || isImage) ? "" : "none";
+    $("searchable-field").style.display = (isPdf || isImage) ? "" : "none";
 
     if (isPdf) {
       try {
@@ -111,6 +120,8 @@ fileInput.addEventListener("change", async () => {
   // (still subject to the per-file layout-mode page cap, applied server-side).
   pagesField.style.display = "none";
   $("layout-field").style.display = "";
+  $("preprocess-field").style.display = "";
+  $("searchable-field").style.display = "";
   $("layout-cap-note").classList.add("hidden");
 });
 
@@ -143,6 +154,72 @@ function applyLayoutCap() {
     note.classList.add("hidden");
   }
 }
+
+// ---- presets: one-click option bundles for common tasks --------------------
+const PRESETS = {
+  standard: { use_layout: false, preprocess: true, make_searchable: false, gen_toc: false, dpi: "300", all_pages: true },
+  research: { use_layout: true,  preprocess: true, make_searchable: true,  gen_toc: false, dpi: "300", all_pages: true },
+  policy:   { use_layout: true,  preprocess: true, make_searchable: false, gen_toc: true,  dpi: "300", all_pages: true },
+  meeting:  { use_layout: true,  preprocess: true, make_searchable: false, gen_toc: true,  dpi: "300", all_pages: true },
+};
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return; // "Custom" — leave the user's current choices alone
+  // Premium-only options stay off on the Free plan even if the preset wants them.
+  $("use_layout").checked = p.use_layout && isPremium();
+  $("preprocess").checked = p.preprocess;
+  $("make_searchable").checked = p.make_searchable && isPremium();
+  $("gen_toc").checked = p.gen_toc;
+  $("dpi").value = p.dpi;
+  $("all_pages").checked = p.all_pages;
+  // Fire dependent handlers so the page-range row + extraction page cap update.
+  $("all_pages").dispatchEvent(new Event("change"));
+  useLayoutCb.dispatchEvent(new Event("change"));
+}
+
+$("preset").addEventListener("change", () => applyPreset($("preset").value));
+
+// ---- preset cards: drive the hidden <select>; click active = back to Custom
+function syncPresetCards(value) {
+  document.querySelectorAll("#preset-grid .preset-card").forEach((c) =>
+    c.classList.toggle("active", value !== "" && c.dataset.preset === value)
+  );
+}
+document.querySelectorAll("#preset-grid .preset-card").forEach((card) => {
+  card.addEventListener("click", () => {
+    const sel = $("preset");
+    const next = sel.value === card.dataset.preset ? "" : card.dataset.preset;
+    sel.value = next;
+    sel.dispatchEvent(new Event("change")); // runs applyPreset
+    syncPresetCards(next);
+  });
+});
+
+// ---- Free / Premium plan toggle ------------------------------------------
+// Display-only gating: Free hides the premium controls; Premium reveals them.
+// No auth/payments — switching to Free also forces premium options off so a
+// previously-set option (e.g. via a preset) can't be submitted while hidden.
+let plan = "free";
+function isPremium() { return plan === "premium"; }
+function setPlan(next) {
+  plan = next === "premium" ? "premium" : "free";
+  document.body.classList.toggle("plan-premium", isPremium());
+  document.body.classList.toggle("plan-free", !isPremium());
+  document.querySelectorAll("#plan-toggle .plan-opt").forEach((b) =>
+    b.classList.toggle("active", b.dataset.plan === plan)
+  );
+  if (!isPremium()) {
+    let changed = false;
+    if (useLayoutCb.checked) { useLayoutCb.checked = false; changed = true; }
+    if ($("make_searchable").checked) $("make_searchable").checked = false;
+    if (changed) useLayoutCb.dispatchEvent(new Event("change")); // reset page cap
+  }
+}
+document.querySelectorAll("#plan-toggle .plan-opt").forEach((b) =>
+  b.addEventListener("click", () => setPlan(b.dataset.plan))
+);
+setPlan("free"); // default plan on load
 
 useLayoutCb.addEventListener("change", applyLayoutCap);
 $("start_page").addEventListener("change", () => { if (useLayoutCb.checked) applyLayoutCap(); });
@@ -183,6 +260,10 @@ form.addEventListener("submit", async (e) => {
 function buildFormData(forceNoLayout) {
   const fd = new FormData(form);
   fd.set("use_layout", forceNoLayout ? "false" : ($("use_layout").checked ? "true" : "false"));
+  // Checkboxes are absent from FormData when unchecked, so set the value explicitly.
+  fd.set("preprocess", $("preprocess").checked ? "true" : "false");
+  fd.set("make_searchable", $("make_searchable").checked ? "true" : "false");
+  fd.set("gen_toc", $("gen_toc").checked ? "true" : "false");
   // all-pages => omit range so backend converts everything
   if (allPagesCb.checked || !$("start_page").value) fd.delete("start_page");
   if (allPagesCb.checked || !$("end_page").value) fd.delete("end_page");
@@ -231,6 +312,10 @@ async function submitBatch() {
   const lang = $("lang").value;
   const dpi = $("dpi").value;
   const useLayout = useLayoutCb.checked ? "true" : "false";
+  const preprocess = $("preprocess").checked ? "true" : "false";
+  const makeSearchable = $("make_searchable").checked ? "true" : "false";
+  const genToc = $("gen_toc").checked ? "true" : "false";
+  const preset = $("preset").value;
 
   for (const file of files) {
     const item = { filename: file.name, jobId: null, status: "uploading", done: 0, total: 0, message: null };
@@ -242,6 +327,10 @@ async function submitBatch() {
     fd.append("lang", lang);
     fd.append("dpi", dpi);
     fd.append("use_layout", useLayout);
+    fd.append("preprocess", preprocess);
+    fd.append("make_searchable", makeSearchable);
+    fd.append("gen_toc", genToc);
+    fd.append("preset", preset);
     fd.append("batch_id", batchId);
 
     try {
@@ -447,6 +536,15 @@ async function loadResults(jobId, filename) {
   $("download-md").href = `/api/jobs/${jobId}/markdown`;
   $("download-zip").href = `/api/jobs/${jobId}/download`;
   $("download-zip-top").href = `/api/jobs/${jobId}/download`;
+  $("download-chunks").href = `/api/jobs/${jobId}/chunks.json`;
+
+  // Searchable PDF is optional — only show the button if this job produced one.
+  const searchableUrl = `/api/jobs/${jobId}/searchable.pdf`;
+  try {
+    const head = await fetch(searchableUrl, { method: "HEAD" });
+    if (head.ok) { $("download-searchable").href = searchableUrl; show($("searchable-card")); }
+    else hide($("searchable-card"));
+  } catch { hide($("searchable-card")); }
 
   const statsRes = await fetch(`/api/jobs/${jobId}/stats`);
   renderStats(await statsRes.json());
@@ -549,14 +647,32 @@ async function showComparePage(idx) {
   }
   $("cmp-md").innerHTML = data.html || "<em class='muted'>No text detected on this page.</em>";
   $("cmp-rawtext").textContent = data.raw || "";
+
+  // OCR confidence (whole-page OCR pages only): badge + highlighted view.
+  const conf = data.conf;
+  const confBtn = $("cmp-conf");
+  const badge = $("cmp-conf-badge");
+  if (conf && conf.mean != null) {
+    $("cmp-confhtml").innerHTML = conf.html || "";
+    confBtn.classList.remove("hidden");
+    badge.textContent = `OCR ${conf.mean}%` + (conf.low ? ` · ${conf.low} low-confidence` : "");
+    badge.className = "conf-badge " + (conf.mean >= 85 ? "good" : conf.mean >= 70 ? "ok" : "poor");
+    badge.classList.remove("hidden");
+  } else {
+    confBtn.classList.add("hidden");
+    badge.classList.add("hidden");
+    if (cmp.mode === "conf") setCompareMode("rendered"); // page has no conf — fall back
+  }
 }
 
 function setCompareMode(mode) {
   cmp.mode = mode;
   $("cmp-rendered").classList.toggle("active", mode === "rendered");
   $("cmp-raw").classList.toggle("active", mode === "raw");
+  $("cmp-conf").classList.toggle("active", mode === "conf");
   $("cmp-md").classList.toggle("hidden", mode !== "rendered");
   $("cmp-rawtext").classList.toggle("hidden", mode !== "raw");
+  $("cmp-confhtml").classList.toggle("hidden", mode !== "conf");
 }
 
 // In live mode, navigating to the newest page resumes auto-follow; going back
@@ -573,26 +689,51 @@ $("cmp-page-input").addEventListener("change", () => {
 });
 $("cmp-rendered").addEventListener("click", () => setCompareMode("rendered"));
 $("cmp-raw").addEventListener("click", () => setCompareMode("raw"));
+$("cmp-conf").addEventListener("click", () => setCompareMode("conf"));
 
 function renderStats(stats) {
   const cols = ["word_count", "char_count", "char_count_no_spaces", "image_count", "table_count", "formula_count"];
   const labelCol = stats.label_col || "page";
   const rows = stats.rows || [];
+  const hasConf = rows.some((r) => r.mean_conf != null); // OCR pages only
+  const totals = stats.totals || {};
 
-  let html = '<div class="stats-wrap"><table class="stats-table"><thead><tr>';
+  // ---- headline metric cards (mirrors the design's 3-up summary) ----
+  const unit = labelCol === "page" ? "Pages" : "Sections";
+  const confVals = rows.map((r) => r.mean_conf).filter((v) => v != null);
+  const avgConf = confVals.length ? Math.round(confVals.reduce((a, b) => a + b, 0) / confVals.length) : null;
+  const confClass = avgConf == null ? "" : avgConf >= 85 ? "good" : avgConf >= 70 ? "ok" : "poor";
+  const metric = (ico, val, label, sub, cls = "") =>
+    `<div class="metric-card"><span class="metric-ico">${ico}</span>` +
+    `<div class="metric-val ${cls}">${val}</div>` +
+    `<div class="metric-label">${label}</div><div class="metric-sub">${sub}</div></div>`;
+  const icoDoc = "<svg viewBox='0 0 24 24'><path d='M7 3h7l5 5v13H7zM14 3v5h5' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round'/></svg>";
+  const icoBrain = "<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='3' fill='none' stroke='currentColor' stroke-width='1.6'/><path d='M12 2v3m0 14v3m10-10h-3M5 12H2' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round'/></svg>";
+  const icoText = "<svg viewBox='0 0 24 24'><path d='M5 6h14M5 12h14M5 18h9' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round'/></svg>";
+  let html = '<div class="metric-grid">';
+  html += metric(icoDoc, rows.length, `${unit} Processed`, "Successfully converted.");
+  html += metric(icoBrain, avgConf == null ? "—" : avgConf + "%", "OCR Confidence", avgConf == null ? "Not applicable (digital/text)." : "Average across pages.", confClass);
+  html += metric(icoText, (totals.word_count ?? 0).toLocaleString(), "Words Extracted", "Total across the document.");
+  html += "</div>";
+
+  html += '<h3 class="section-label">Per-' + (labelCol === "page" ? "page" : "section") + ' detail</h3>';
+  html += '<div class="stats-wrap"><table class="stats-table"><thead><tr>';
   html += `<th>${labelCol === "page" ? "Page" : "Section / Sheet"}</th><th>Source</th>`;
   for (const c of cols) html += `<th>${prettyCol(c)}</th>`;
+  if (hasConf) html += "<th>Avg Conf</th>";
   html += "</tr></thead><tbody>";
   for (const row of rows) {
     html += "<tr>";
     html += `<td>${escapeHtml(String(row[labelCol] ?? ""))}</td>`;
     html += `<td>${escapeHtml(String(row.source ?? ""))}</td>`;
     for (const c of cols) html += `<td>${row[c] ?? 0}</td>`;
+    if (hasConf) html += `<td>${row.mean_conf != null ? row.mean_conf + "%" : "—"}</td>`;
     html += "</tr>";
   }
   const t = stats.totals || {};
   html += '<tr class="total-row"><td>TOTAL</td><td></td>';
   for (const c of cols) html += `<td>${t[c] ?? 0}</td>`;
+  if (hasConf) html += "<td></td>";
   html += "</tr></tbody></table></div>";
   $("stats-content").innerHTML = html;
 }

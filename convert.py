@@ -117,6 +117,7 @@ def run_pdf(file_bytes: bytes, out_dir: Path, args) -> dict:
             start_page=start,
             end_page=end,
             progress_callback=on_progress,
+            preprocess_scans=not args.no_preprocess,
         )
 
     return result
@@ -142,6 +143,11 @@ def main():
         "--use-layout",
         action="store_true",
         help="Enable PP-StructureV3 layout analysis for scanned pages (experimental, may crash)",
+    )
+    parser.add_argument(
+        "--no-preprocess",
+        action="store_true",
+        help="Disable scan enhancement (deskew/denoise/contrast) applied before OCR",
     )
     args = parser.parse_args()
 

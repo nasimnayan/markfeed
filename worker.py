@@ -62,6 +62,17 @@ def main() -> None:
     )
 
     try:
+        # Optional searchable-PDF output (PDF + image inputs): each page writes a
+        # single-page PDF here; they're merged in order once conversion finishes.
+        make_searchable = job.get("make_searchable", False)
+        searchable_pages_dir = job_dir / "searchable_pages"
+
+        def on_searchable(idx: int, pdf_bytes: bytes) -> None:
+            searchable_pages_dir.mkdir(parents=True, exist_ok=True)
+            (searchable_pages_dir / f"{idx:05d}.pdf").write_bytes(pdf_bytes)
+
+        searchable_cb = on_searchable if make_searchable else None
+
         if job["file_type"] == "pdf":
             from converters.pdf_converter import convert_pdf
 
@@ -103,6 +114,46 @@ def main() -> None:
                 progress_callback=on_progress,
                 previews_dir=job_dir / "previews",
                 page_callback=on_page,
+                preprocess_scans=job.get("preprocess", True),
+                searchable_callback=searchable_cb,
+                conf_dir=job_dir / "conf",
+            )
+            rows = result["pages"]
+            label_col = "page"
+        elif job["file_type"] in {"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"}:
+            from converters.image_converter import convert_image
+
+            ftype = job["file_type"]
+            file_bytes = (job_dir / f"input.{ftype}").read_bytes()
+
+            # An image is one page; reuse the live/preview plumbing so the compare
+            # view works exactly as it does for scanned PDF pages.
+            pages_dir = job_dir / "pages"
+            pages_dir.mkdir(parents=True, exist_ok=True)
+            live_rows: list[dict] = []
+
+            def on_page(page_index: int, page_md: str, row: dict) -> None:
+                (pages_dir / f"{page_index}.md").write_text(page_md, encoding="utf-8")
+                live_rows.append(
+                    {
+                        "page": row.get("page"),
+                        "source": row.get("source"),
+                        "preview": row.get("preview"),
+                        "word_count": row.get("word_count", 0),
+                    }
+                )
+                write_json_atomic(job_dir / "live.json", {"pages": live_rows})
+
+            result = convert_image(
+                file_bytes,
+                images_dir,
+                lang=job.get("lang", "ben+eng"),
+                use_layout=job.get("use_layout", False),
+                previews_dir=job_dir / "previews",
+                page_callback=on_page,
+                preprocess_scans=job.get("preprocess", True),
+                searchable_callback=searchable_cb,
+                conf_dir=job_dir / "conf",
             )
             rows = result["pages"]
             label_col = "page"
@@ -122,7 +173,20 @@ def main() -> None:
             rows = result["sections"]
             label_col = "label"
 
-        (job_dir / "converted.md").write_text(result["markdown"], encoding="utf-8")
+        markdown_out = result["markdown"]
+        if job.get("gen_toc"):
+            from converters.postprocess import build_toc
+
+            markdown_out = build_toc(markdown_out)
+        (job_dir / "converted.md").write_text(markdown_out, encoding="utf-8")
+
+        # Merge per-page searchable PDFs (in page order) into one file.
+        if make_searchable and searchable_pages_dir.exists():
+            from converters.searchable import merge_to_file
+
+            page_pdfs = sorted(searchable_pages_dir.glob("*.pdf"))
+            if page_pdfs:
+                merge_to_file(page_pdfs, job_dir / "searchable.pdf")
 
         meta = {k: v for k, v in result.items() if k != "markdown"}
         meta["label_col"] = label_col

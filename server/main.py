@@ -11,11 +11,18 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import markdown as md_lib
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from converters.chunker import PAGE_SPLIT_RE, build_chunks, split_pages
+from converters.postprocess import slugify as _toc_slugify
 from server.jobs import JobManager
+
+# Shared markdown rendering config. The `toc` extension adds heading ids using the
+# same slugify build_toc uses, so the generated Contents links resolve (Bengali too).
+_MD_EXTENSIONS = ["tables", "fenced_code", "sane_lists", "nl2br", "toc"]
+_MD_CONFIGS = {"toc": {"slugify": _toc_slugify}}
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -58,13 +65,20 @@ async def create_job(
     lang: str = Form("ben+eng"),
     dpi: int = Form(300),
     use_layout: bool = Form(False),
+    preprocess: bool = Form(True),
+    make_searchable: bool = Form(False),
+    gen_toc: bool = Form(False),
+    preset: str | None = Form(None),
     start_page: int | None = Form(None),
     end_page: int | None = Form(None),
     batch_id: str | None = Form(None),
 ):
     suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in (".pdf", ".docx", ".csv", ".xls", ".xlsx"):
-        raise HTTPException(400, "Only PDF, Word, CSV and Excel files are supported")
+    if suffix not in (
+        ".pdf", ".docx", ".csv", ".xls", ".xlsx",
+        ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif",
+    ):
+        raise HTTPException(400, "Only PDF, Word, CSV, Excel and image files are supported")
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(400, "Uploaded file is empty")
@@ -93,6 +107,10 @@ async def create_job(
             "lang": lang,
             "dpi": dpi,
             "use_layout": use_layout,
+            "preprocess": preprocess,
+            "make_searchable": make_searchable,
+            "gen_toc": gen_toc,
+            "preset": preset,
             "start_page": start,
             "end_page": end,
             "batch_id": batch_id,
@@ -152,11 +170,26 @@ def job_markdown(job_id: str):
     return (job_dir / "converted.md").read_text(encoding="utf-8")
 
 
+@app.get("/api/jobs/{job_id}/chunks.json")
+def job_chunks(job_id: str):
+    """RAG-ready chunked JSON (one chunk per page/section). Generated on request."""
+    import json
+
+    job_dir = _require_done(job_id)
+    payload = json.dumps(build_chunks(job_dir), ensure_ascii=False, indent=2)
+    stem = Path((job_manager.get_job(job_id) or {}).get("filename", "document")).stem
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{stem}_chunks.json"'},
+    )
+
+
 @app.get("/api/jobs/{job_id}/preview", response_class=HTMLResponse)
 def job_preview(job_id: str):
     job_dir = _require_done(job_id)
     text = (job_dir / "converted.md").read_text(encoding="utf-8")
-    html = md_lib.markdown(text, extensions=["tables", "fenced_code", "sane_lists", "nl2br"])
+    html = md_lib.markdown(text, extensions=_MD_EXTENSIONS, extension_configs=_MD_CONFIGS)
     # Point relative image links at this job's image route.
     html = re.sub(
         r'(<img[^>]*\bsrc=")images/',
@@ -190,6 +223,20 @@ def job_image(job_id: str, name: str):
     return FileResponse(str(img_path))
 
 
+@app.get("/api/jobs/{job_id}/searchable.pdf")
+def job_searchable_pdf(job_id: str):
+    """The merged searchable PDF (original-looking pages + invisible OCR text)."""
+    job_dir = job_manager._job_dir(job_id)
+    pdf_path = job_dir / "searchable.pdf"
+    if not pdf_path.exists():
+        raise HTTPException(404, "Searchable PDF not available for this job")
+    job = job_manager.get_job(job_id) or {}
+    stem = Path(job.get("filename", "document")).stem
+    return FileResponse(
+        str(pdf_path), media_type="application/pdf", filename=f"{stem}_searchable.pdf"
+    )
+
+
 @app.get("/api/jobs/{job_id}/previews/{name}")
 def job_preview_image(job_id: str, name: str):
     safe = Path(name).name  # path-traversal guard
@@ -197,18 +244,6 @@ def job_preview_image(job_id: str, name: str):
     if not img_path.exists():
         raise HTTPException(404, "Preview not found")
     return FileResponse(str(img_path))
-
-
-_PAGE_SPLIT_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->")
-
-
-def _split_pages(md_text: str) -> dict[int, str]:
-    """Split combined markdown back into per-page chunks on the page markers."""
-    parts = _PAGE_SPLIT_RE.split(md_text)
-    pages: dict[int, str] = {}
-    for k in range(1, len(parts) - 1, 2):
-        pages[int(parts[k])] = parts[k + 1].strip()
-    return pages
 
 
 @app.get("/api/jobs/{job_id}/compare")
@@ -264,15 +299,26 @@ def job_page(job_id: str, page: int):
     job_dir = job_manager._job_dir(job_id)
     combined = job_dir / "converted.md"
     if combined.exists():
-        chunk = _split_pages(combined.read_text(encoding="utf-8")).get(page, "")
+        chunk = split_pages(combined.read_text(encoding="utf-8")).get(page, "")
     else:
         per_page = job_dir / "pages" / f"{page}.md"
         if not per_page.exists():
             raise HTTPException(404, "Page not ready")
-        chunk = _PAGE_SPLIT_RE.sub("", per_page.read_text(encoding="utf-8")).strip()
-    html = md_lib.markdown(chunk, extensions=["tables", "fenced_code", "sane_lists", "nl2br"])
+        chunk = PAGE_SPLIT_RE.sub("", per_page.read_text(encoding="utf-8")).strip()
+    html = md_lib.markdown(chunk, extensions=_MD_EXTENSIONS, extension_configs=_MD_CONFIGS)
     html = re.sub(r'(<img[^>]*\bsrc=")images/', rf'\1/api/jobs/{job_id}/images/', html)
-    return {"html": html, "raw": chunk}
+
+    # Per-page OCR confidence (whole-page OCR only) for the verify view.
+    conf = None
+    conf_path = job_dir / "conf" / f"{page}.json"
+    if conf_path.exists():
+        import json
+
+        try:
+            conf = json.loads(conf_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            conf = None
+    return {"html": html, "raw": chunk, "conf": conf}
 
 
 @app.get("/api/jobs/{job_id}/download")
@@ -289,6 +335,12 @@ def job_download(job_id: str):
             for img in sorted(images_dir.glob("*")):
                 if img.is_file():
                     zf.write(img, arcname=f"images/{img.name}")
+        searchable_pdf = job_dir / "searchable.pdf"
+        if searchable_pdf.exists():
+            zf.write(searchable_pdf, arcname="searchable.pdf")
+        import json
+
+        zf.writestr("chunks.json", json.dumps(build_chunks(job_dir), ensure_ascii=False, indent=2))
     buf.seek(0)
     return StreamingResponse(
         buf,

@@ -7,11 +7,24 @@ Context for future Claude Code sessions working on this project. Read this first
 
 ## What this is
 
-**MarkFeed** is a fully-offline web app that converts **scanned PDFs, digital PDFs,
-Word (.docx), and spreadsheets (CSV / .xls / .xlsx)** files into clean **Markdown**,
-with a per-page accuracy stats table and a side-by-side **verify** view (original
-scan vs converted text). It was built primarily for OCR of **Bengali + English**
-scanned textbooks.
+**MarkFeed** is an offline-first **Bangla (+ English) document digitization & AI
+knowledge-preparation platform**. It is *not* "just a PDF→Markdown converter" — Markdown
+is one export among many. The real value chain is:
+**Document → OCR → Verification → Correction → Archive → AI-ready output.** See
+[`docs/product-vision.md`](docs/product-vision.md) for the full positioning and principles.
+
+It ingests **scanned PDFs, digital PDFs, Word (.docx), spreadsheets (CSV / .xls / .xlsx),
+and images**, and produces **Markdown, Searchable PDF, Chunked JSON (RAG), and per-page
+stats / confidence** — with a side-by-side **verify** view. Optimized for mixed
+Bangla + English documents (BRAC/NGO reports, govt circulars, research papers, question
+banks, books, meeting/monitoring/survey reports) for researchers, students, NGOs,
+universities, archives and government institutions.
+
+**Principles (do not violate):** offline-first (no cloud, no external APIs, no vendor
+lock-in); **no-LLM by default** (deterministic core; optional *local* models only);
+**OCR quality + human-in-the-loop verification are the product**, not feature count;
+converters stay **pure and tier-agnostic** (any Basic/Advanced segmentation lives at the
+UI/API layer; no payments/accounts/auth now). Everything stays benchmarkable/reproducible.
 
 **No LLM, no cloud APIs.** Everything runs locally with open-source packages
 (PyMuPDF, Tesseract, PaddleOCR layout model, img2table, mammoth, FastAPI).
