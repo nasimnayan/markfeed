@@ -1,6 +1,7 @@
 """Convert PDF files (digital or scanned) to Markdown with per-page stats."""
 
 import io
+import json
 import re
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pymupdf4llm
 import pytesseract
 from PIL import Image
 
-from converters import layout_ocr, tesseract_config  # noqa: F401  (sets tesseract path)
+from converters import confidence, layout_ocr, preprocess, searchable, tesseract_config  # noqa: F401  (sets tesseract path)
 from converters.stats import count_formulas, count_images, count_md_tables, text_stats
 
 # pymupdf4llm wraps an image-with-text-layer region as an "omitted picture" plus a
@@ -129,6 +130,9 @@ def convert_pdf(
     progress_callback=None,
     previews_dir: Path | None = None,
     page_callback=None,
+    preprocess_scans: bool = True,
+    searchable_callback=None,
+    conf_dir: Path | None = None,
 ) -> dict:
     """Convert a PDF to Markdown.
 
@@ -160,6 +164,7 @@ def convert_pdf(
         page = doc[i]
         text = page.get_text().strip()
         layout_counts = None
+        conf_info = None  # (mean, low, html) when whole-page OCR ran
         rendered_img = None  # full-res render, reused for the preview when present
 
         dominant_img = None
@@ -173,6 +178,12 @@ def convert_pdf(
             page_md = _relativize_image_paths(page_md, images_dir)
             page_md = _inject_missing_tables(page_md, page)
             source = "digital"
+            if searchable_callback:
+                # Digital page already has real text — copy it as-is.
+                try:
+                    searchable_callback(i, searchable.page_pdf_from_pdf_page(doc, i))
+                except Exception:
+                    pass
         else:
             if dominant_img is not None:
                 rendered_img = dominant_img
@@ -180,19 +191,32 @@ def convert_pdf(
                 pix = page.get_pixmap(matrix=_capped_matrix(page.rect, matrix))
                 rendered_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
+            # OCR on the enhanced image; the preview keeps the original render so
+            # the compare view shows what was actually scanned.
+            ocr_img = preprocess.enhance(rendered_img) if preprocess_scans else rendered_img
+
             if use_layout:
                 try:
                     page_md, layout_counts = layout_ocr.process_page_image(
-                        rendered_img, lang, images_dir, i
+                        ocr_img, lang, images_dir, i
                     )
                 except Exception:
-                    page_md = pytesseract.image_to_string(rendered_img, lang=lang).strip()
+                    page_md, c_mean, c_low, c_html = confidence.ocr_with_confidence(ocr_img, lang)
+                    conf_info = (c_mean, c_low, c_html)
                     layout_counts = None
             else:
-                page_md = pytesseract.image_to_string(rendered_img, lang=lang).strip()
+                page_md, c_mean, c_low, c_html = confidence.ocr_with_confidence(ocr_img, lang)
+                conf_info = (c_mean, c_low, c_html)
                 layout_counts = None
 
             source = "ocr"
+            if searchable_callback:
+                # Embed the same (enhanced) image we OCR'd so the hidden text layer
+                # aligns with what the reader sees.
+                try:
+                    searchable_callback(i, searchable.page_pdf_from_image(ocr_img, lang))
+                except Exception:
+                    pass
 
         preview_name = None
         if previews_dir is not None:
@@ -214,6 +238,17 @@ def convert_pdf(
             row["image_count"] = count_images(page_md)
             row["table_count"] = count_md_tables(page_md)
             row["formula_count"] = count_formulas(page_md)
+
+        if conf_info is not None:
+            c_mean, c_low, c_html = conf_info
+            row["mean_conf"] = c_mean
+            row["low_conf_count"] = c_low
+            if conf_dir is not None:
+                conf_dir.mkdir(parents=True, exist_ok=True)
+                (conf_dir / f"{i}.json").write_text(
+                    json.dumps({"mean": c_mean, "low": c_low, "html": c_html}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
         page_rows.append(row)
 
         if page_callback:
