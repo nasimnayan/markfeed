@@ -27,7 +27,7 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def write_json_atomic(path: Path, data: dict) -> None:
+def write_json_atomic(path: Path, data) -> None:
     """Write JSON to a temp file then atomically replace the target.
 
     Path.replace() maps to MoveFileEx with replace-existing on Windows, which
@@ -37,6 +37,44 @@ def write_json_atomic(path: Path, data: dict) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _load_prior_pages(pages_dir: Path) -> tuple[set, dict]:
+    """Reload pages converted by a previous (crashed) run from disk.
+
+    Each completed page persists as pages/<i>.md + pages/<i>.row.json. Returns
+    (done_pages, prior_pages) where prior_pages[i] = {"md", "row"} — only pages
+    that have BOTH files (a fully-checkpointed page) are treated as done.
+    """
+    done: set[int] = set()
+    prior: dict[int, dict] = {}
+    if not pages_dir.exists():
+        return done, prior
+    for row_file in pages_dir.glob("*.row.json"):
+        try:
+            i = int(row_file.name[: -len(".row.json")])
+        except ValueError:
+            continue
+        md_file = pages_dir / f"{i}.md"
+        if not md_file.exists():
+            continue
+        row = _read_json(row_file)
+        if row is None:
+            continue
+        try:
+            md = md_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        done.add(i)
+        prior[i] = {"md": md, "row": row}
+    return done, prior
 
 
 def main() -> None:
@@ -86,13 +124,40 @@ def main() -> None:
 
             # Live compare: persist each page the instant it finishes so the UI can
             # show "original vs converted" while the rest of the document is still
-            # processing — not only at the end.
+            # processing — not only at the end. Each page also persists its full
+            # stats row (pages/<i>.row.json), which is what lets a crashed run
+            # resume without re-OCRing the pages it already finished.
             pages_dir = job_dir / "pages"
             pages_dir.mkdir(parents=True, exist_ok=True)
+
+            # Resume: pick up pages a previous run already converted.
+            done_pages, prior_pages = _load_prior_pages(pages_dir)
+
+            # Poison-page guard. attempt.json records the page that was in flight; if
+            # that page never produced a row it's what crashed the worker. First
+            # resume forces it to plain OCR (the layout model is the unstable bit);
+            # if it crashes again, the next resume skips it so we never loop forever.
+            force_plain_pages: set[int] = set()
+            skip_pages: set[int] = set()
+            poison = set((_read_json(job_dir / "poison.json") or {}).get("pages", []))
+            attempt = _read_json(job_dir / "attempt.json") or {}
+            crashed_page = attempt.get("page")
+            if isinstance(crashed_page, int) and crashed_page not in done_pages:
+                if crashed_page in poison:
+                    skip_pages.add(crashed_page)
+                else:
+                    poison.add(crashed_page)
+                    force_plain_pages.add(crashed_page)
+                    write_json_atomic(job_dir / "poison.json", {"pages": sorted(poison)})
+
             live_rows: list[dict] = []
+
+            def before_page(page_index: int) -> None:
+                write_json_atomic(job_dir / "attempt.json", {"page": page_index})
 
             def on_page(page_index: int, page_md: str, row: dict) -> None:
                 (pages_dir / f"{page_index}.md").write_text(page_md, encoding="utf-8")
+                write_json_atomic(pages_dir / f"{page_index}.row.json", row)
                 live_rows.append(
                     {
                         "page": row.get("page"),
@@ -117,6 +182,11 @@ def main() -> None:
                 preprocess_scans=job.get("preprocess", True),
                 searchable_callback=searchable_cb,
                 conf_dir=job_dir / "conf",
+                done_pages=done_pages,
+                prior_pages=prior_pages,
+                force_plain_pages=force_plain_pages,
+                skip_pages=skip_pages,
+                before_page_callback=before_page,
             )
             rows = result["pages"]
             label_col = "page"

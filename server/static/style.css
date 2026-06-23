@@ -210,13 +210,13 @@ button.primary:hover, a.primary:hover { filter: brightness(1.08); }
 button.primary:active { transform: translateY(1px); }
 button.primary:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
 .big { width: 100%; padding: 13px; font-size: 15px; }
-a.ghost {
+a.ghost, button.ghost {
   display: inline-flex; align-items: center; gap: 8px;
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 9px;
-  padding: 11px 20px; font-size: 14px; font-weight: 550; text-decoration: none;
+  padding: 11px 20px; font-size: 14px; font-weight: 550; text-decoration: none; cursor: pointer;
 }
-a.ghost:hover { border-color: var(--accent); }
+a.ghost:hover, button.ghost:hover { border-color: var(--accent); }
 
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
@@ -233,6 +233,7 @@ a.ghost:hover { border-color: var(--accent); }
 /* error */
 .error-card { border-color: rgba(255, 122, 122, 0.4); background: linear-gradient(180deg, var(--danger-bg), var(--bg-2)); }
 .error-card h2 { color: var(--danger); }
+.error-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 
 /* batch progress panel */
 .batch-list { list-style: none; margin: 0; padding: 0; }

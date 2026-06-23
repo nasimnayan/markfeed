@@ -27,16 +27,20 @@ has first-class support for **Bengali + English** scanned books.
 
 - **Three inputs:** scanned PDF (OCR), digital/text PDF, and DOCX.
 - **Two scan modes:**
-  - *Plain text* — fast, stable whole-page OCR (no page limit).
+  - *Plain text* — fast, stable whole-page OCR.
   - *Extract diagrams & tables* — detects figures → embedded images, tables →
-    Markdown tables, headings, and reading order.
+    Markdown tables, headings, and reading order. No page limit; for very long
+    books a page range is gently recommended (slower + higher crash risk), but
+    you can run the whole document.
 - **Verify view** — original page image on the left, converted Markdown on the
   right, page-by-page, with a Rendered/Raw toggle.
 - **Per-page stats** — word / character / image / table / formula counts + totals.
 - **Downloads** — `.md` file or a `.zip` with Markdown + extracted images.
 - **Recent jobs** sidebar to revisit past conversions.
-- **Crash-isolated** — each conversion runs in its own process, so a failure never
-  takes down the server; you get a one-click retry.
+- **Crash-isolated & resumable** — each conversion runs in its own process, so a
+  failure never takes down the server. Pages finished before a crash are saved;
+  you can view the partial result and **Resume** to continue from where it stopped
+  (or one-click retry without layout mode).
 
 ## 🧰 Tech
 

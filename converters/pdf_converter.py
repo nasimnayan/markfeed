@@ -133,6 +133,11 @@ def convert_pdf(
     preprocess_scans: bool = True,
     searchable_callback=None,
     conf_dir: Path | None = None,
+    done_pages: set | None = None,
+    prior_pages: dict | None = None,
+    force_plain_pages: set | None = None,
+    skip_pages: set | None = None,
+    before_page_callback=None,
 ) -> dict:
     """Convert a PDF to Markdown.
 
@@ -143,7 +148,24 @@ def convert_pdf(
     row) the moment each page finishes — this powers the live, during-conversion
     compare view (the caller persists the chunk + row so the UI can show it before
     the whole document is done).
+
+    Resume support (for long extraction runs that may crash mid-document):
+    - done_pages / prior_pages: page indices already converted in a previous run,
+      with their saved {"md", "row"} so they are re-emitted in order without
+      re-OCR (keeps the assembled markdown + stats complete on a resumed run).
+    - force_plain_pages: indices to OCR with plain Tesseract even if use_layout is
+      on (the layout model is what segfaults — this is the poison-page guard).
+    - skip_pages: indices to emit as a "could not process" placeholder (used when a
+      page crashed even in plain mode, so a resume never loops on it forever).
+    - before_page_callback(i): called just before a page is *actually processed*
+      (not for done/skip pages) so the caller can checkpoint which page is in
+      flight, enabling poison-page detection after a hard crash.
     """
+    done_pages = done_pages or set()
+    prior_pages = prior_pages or {}
+    force_plain_pages = force_plain_pages or set()
+    skip_pages = skip_pages or set()
+
     images_dir.mkdir(parents=True, exist_ok=True)
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     total = len(doc)
@@ -161,6 +183,41 @@ def convert_pdf(
     page_rows = []
 
     for i in range(start, end):
+        # Resume fast path: a page already converted in an earlier run is re-emitted
+        # from its saved markdown + row (no OCR), keeping order and stats intact.
+        if i in done_pages and i in prior_pages:
+            page_md = prior_pages[i]["md"]
+            row = prior_pages[i]["row"]
+            page_chunks.append(page_md)
+            page_rows.append(row)
+            if page_callback:
+                page_callback(i, page_md, row)
+            if progress_callback:
+                progress_callback(i - start + 1, end - start)
+            continue
+
+        # A page that crashed the worker even in plain mode: emit a visible
+        # placeholder so the document stays complete and a resume never re-attempts it.
+        if i in skip_pages:
+            page_md = f"<!-- page {i} -->\n\n*[Page {i + 1} could not be processed and was skipped.]*"
+            page_chunks.append(page_md)
+            row = {"page": i, "source": "skipped", "preview": None}
+            row.update(text_stats(page_md))
+            row["image_count"] = 0
+            row["table_count"] = 0
+            row["formula_count"] = 0
+            page_rows.append(row)
+            if page_callback:
+                page_callback(i, page_md, row)
+            if progress_callback:
+                progress_callback(i - start + 1, end - start)
+            continue
+
+        # Checkpoint the page about to be processed so a hard crash here is
+        # attributable to this exact page on the next resume (poison-page guard).
+        if before_page_callback:
+            before_page_callback(i)
+
         page = doc[i]
         text = page.get_text().strip()
         layout_counts = None
@@ -195,7 +252,7 @@ def convert_pdf(
             # the compare view shows what was actually scanned.
             ocr_img = preprocess.enhance(rendered_img) if preprocess_scans else rendered_img
 
-            if use_layout:
+            if use_layout and i not in force_plain_pages:
                 try:
                     page_md, layout_counts = layout_ocr.process_page_image(
                         ocr_img, lang, images_dir, i

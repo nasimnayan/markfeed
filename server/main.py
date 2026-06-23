@@ -86,18 +86,10 @@ async def create_job(
     start = (start_page - 1) if start_page and start_page > 0 else 0
     end = end_page
 
-    # Diagram + table extraction is heavy: clamp the range to a smart per-run cap.
-    if use_layout and suffix == ".pdf":
-        import fitz
-
-        from converters.limits import extraction_page_cap
-
-        total = fitz.open(stream=file_bytes, filetype="pdf").page_count
-        cap = extraction_page_cap(total)
-        if end is None:
-            end = total
-        if end - start > cap:
-            end = start + cap
+    # Extraction mode is heavy (slow + can segfault on this CPU box), but it's a
+    # local, no-cost tool — so the old per-run page cap is no longer enforced.
+    # The user chooses "all pages" or a range, same as plain mode; the UI just
+    # warns that a range is safer for very long books. See converters/limits.py.
 
     job_id = job_manager.create_job(
         file.filename or f"upload{suffix}",
@@ -145,6 +137,19 @@ def job_status(job_id: str):
     if status is None:
         raise HTTPException(404, "Job not found")
     return status
+
+
+@app.post("/api/jobs/{job_id}/resume")
+def resume_job(job_id: str):
+    """Continue a crashed PDF job from the pages it already finished."""
+    result = job_manager.resume_job(job_id)
+    if result == "not_found":
+        raise HTTPException(404, "Job not found")
+    if result == "running":
+        raise HTTPException(409, "Job is already running")
+    if result == "not_resumable":
+        raise HTTPException(400, "Only PDF conversions can be resumed")
+    return {"resuming": job_id}
 
 
 @app.delete("/api/jobs/{job_id}")

@@ -224,7 +224,11 @@
         <section class="card error-card hidden" id="error-card">
           <h2>Conversion failed</h2>
           <p id="error-message"></p>
-          <button id="retry-btn" class="primary hidden">Retry without layout mode</button>
+          <div class="error-actions">
+            <button id="resume-btn" class="primary hidden">Resume</button>
+            <button id="view-partial-btn" class="ghost hidden">View pages converted so far</button>
+            <button id="retry-btn" class="primary hidden">Retry without layout mode</button>
+          </div>
         </section>
 
         <!-- Results -->
