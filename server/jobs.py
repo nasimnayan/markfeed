@@ -124,12 +124,18 @@ class JobManager:
             "message": None,
             "suggest_retry_without_layout": False,
             "use_layout": job.get("use_layout", False),
+            "can_resume": False,
+            "pages_done": progress.get("done", 0),
+            "pages_total": progress.get("total", 0),
         }
         if error:
             out["message"] = error.get("message")
             out["suggest_retry_without_layout"] = error.get(
                 "suggest_retry_without_layout", False
             )
+            out["can_resume"] = error.get("can_resume", False)
+            out["pages_done"] = error.get("pages_done", out["pages_done"])
+            out["pages_total"] = error.get("pages_total", out["pages_total"])
         return out
 
     def list_jobs(self) -> list[dict]:
@@ -194,25 +200,38 @@ class JobManager:
 
         # Non-zero exit. If the worker caught the error it wrote error.json.
         if (job_dir / "error.json").exists():
+            self._attach_partial(job_id)  # salvage finished pages + allow resume
             return  # status already reflects the error
 
         # No error.json => the process died abnormally (segfault / OOM / kill).
         self._mark_crashed(
             job_id,
             f"Worker process crashed unexpectedly (exit code {returncode}). "
-            "This usually means a native crash in the layout-aware OCR "
-            "(PP-StructureV3) pipeline.",
+            "This usually means a native crash in the layout-aware OCR pipeline. "
+            "Pages converted before the crash are saved — you can resume.",
         )
 
     def _mark_crashed(self, job_id: str, message: str) -> None:
         job_dir = self._job_dir(job_id)
         if not job_dir.exists():
             return
+
+        # Salvage whatever pages finished before the crash so they aren't lost and
+        # the job can resume from where it died (PDF jobs only).
+        job = _read_json(job_dir / "job.json") or {}
+        salvaged = self._salvage_partial(job_dir, job)
+        done = salvaged["done"] if salvaged else 0
+        total = salvaged["total"] if salvaged else 0
+        can_resume = bool(job.get("file_type") == "pdf" and salvaged and done < total)
+
         (job_dir / "error.json").write_text(
             json.dumps(
                 {
                     "message": message,
                     "suggest_retry_without_layout": True,
+                    "can_resume": can_resume,
+                    "pages_done": done,
+                    "pages_total": total,
                     "updated_at": _now(),
                 },
                 ensure_ascii=False,
@@ -221,8 +240,126 @@ class JobManager:
         )
         (job_dir / "progress.json").write_text(
             json.dumps(
-                {"status": "crashed", "message": message, "updated_at": _now()},
+                {
+                    "status": "crashed",
+                    "message": message,
+                    "done": done,
+                    "total": total,
+                    "updated_at": _now(),
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",
         )
+
+    def _attach_partial(self, job_id: str) -> None:
+        """Salvage finished pages for a worker-caught failure and mark it resumable.
+
+        The hard-crash path (_mark_crashed) does its own salvage; this handles the
+        other failure path, where the worker caught an exception and wrote
+        error.json itself — we still want partial output + a Resume option.
+        """
+        job_dir = self._job_dir(job_id)
+        job = _read_json(job_dir / "job.json") or {}
+        salvaged = self._salvage_partial(job_dir, job)
+        if not salvaged:
+            return
+        can_resume = bool(job.get("file_type") == "pdf" and salvaged["done"] < salvaged["total"])
+
+        error = _read_json(job_dir / "error.json") or {}
+        error.update(
+            {
+                "can_resume": can_resume,
+                "pages_done": salvaged["done"],
+                "pages_total": salvaged["total"],
+            }
+        )
+        (job_dir / "error.json").write_text(json.dumps(error, ensure_ascii=False), encoding="utf-8")
+
+        progress = _read_json(job_dir / "progress.json") or {"status": "error"}
+        progress.update({"done": salvaged["done"], "total": salvaged["total"]})
+        (job_dir / "progress.json").write_text(
+            json.dumps(progress, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def _selected_page_total(self, job_dir: Path, job: dict) -> int:
+        """Number of pages in the job's selected range (for 'X of Y done')."""
+        try:
+            import fitz
+
+            total = fitz.open(str(job_dir / "input.pdf")).page_count
+        except Exception:  # noqa: BLE001 — best-effort count for the progress label
+            return 0
+        start = job.get("start_page", 0) or 0
+        end = job.get("end_page")
+        end = total if end is None else min(end, total)
+        return max(0, end - start)
+
+    def _salvage_partial(self, job_dir: Path, job: dict) -> dict | None:
+        """Assemble converted.md + result.json from per-page files left on disk.
+
+        Each page the worker finished persists as pages/<i>.md + pages/<i>.row.json
+        (atomic writes), so even a hard segfault leaves those intact. Stitching
+        them here means a crashed long run still yields a usable partial document
+        and a populated stats/compare view — and a resume continues from here.
+        Returns {"done", "total"} or None when nothing was salvageable.
+        """
+        if job.get("file_type") != "pdf":
+            return None
+        pages_dir = job_dir / "pages"
+        if not pages_dir.exists():
+            return None
+
+        indices = []
+        for md_file in pages_dir.glob("*.md"):
+            try:
+                indices.append(int(md_file.stem))
+            except ValueError:
+                continue
+        if not indices:
+            return None
+        indices.sort()
+
+        chunks, rows = [], []
+        for i in indices:
+            try:
+                chunks.append((pages_dir / f"{i}.md").read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            row = _read_json(pages_dir / f"{i}.row.json") or {"page": i, "source": "ocr"}
+            rows.append(row)
+
+        total = self._selected_page_total(job_dir, job)
+        (job_dir / "converted.md").write_text("\n\n".join(chunks), encoding="utf-8")
+        (job_dir / "result.json").write_text(
+            json.dumps(
+                {"pages": rows, "label_col": "page", "page_count": total, "partial": True},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return {"done": len(rows), "total": total}
+
+    # ----- resume -----------------------------------------------------------
+    def resume_job(self, job_id: str) -> str:
+        """Re-enqueue a crashed PDF job; the worker continues from saved pages.
+
+        Returns 'resuming', 'running', 'not_resumable', or 'not_found'.
+        """
+        job_dir = self._job_dir(job_id)
+        job = _read_json(job_dir / "job.json")
+        if job is None:
+            return "not_found"
+        if self._current == job_id:
+            return "running"
+        if job.get("file_type") != "pdf":
+            return "not_resumable"
+
+        # Clear terminal markers so the worker re-runs; the partial converted.md /
+        # result.json stay in place (served until the resumed run overwrites them).
+        (job_dir / "error.json").unlink(missing_ok=True)
+        (job_dir / "progress.json").write_text(
+            json.dumps({"status": "queued"}, ensure_ascii=False), encoding="utf-8"
+        )
+        self._queue.put_nowait(job_id)
+        return "resuming"

@@ -31,6 +31,8 @@ const progressText = $("progress-text");
 const errorCard = $("error-card");
 const errorMessage = $("error-message");
 const retryBtn = $("retry-btn");
+const resumeBtn = $("resume-btn");
+const viewPartialBtn = $("view-partial-btn");
 
 const resultsCard = $("results-card");
 const useLayoutCb = $("use_layout");
@@ -125,32 +127,25 @@ fileInput.addEventListener("change", async () => {
   $("layout-cap-note").classList.add("hidden");
 });
 
-// ---- extraction-mode page cap -------------------------------------------
+// ---- extraction-mode advisory (NOT a hard cap) --------------------------
+// Diagram + table mode is slow and can segfault on very long books, but it is
+// a local, no-cost tool — so we no longer force a bounded range. The user picks
+// "all pages" or a range, exactly like plain mode; we just advise a range for
+// big PDFs. (Kept the suggested chunk size from extraction_page_cap.)
 function applyLayoutCap() {
   const on = useLayoutCb.checked;
   const note = $("layout-cap-note");
   const cap = pdfInfo.extraction_cap;
   const total = pdfInfo.page_count;
 
-  if (on && cap != null) {
-    // Force a bounded range: uncheck "all pages", reveal range, clamp inputs.
-    if (allPagesCb.checked) {
-      allPagesCb.checked = false;
-      allPagesCb.dispatchEvent(new Event("change"));
-    }
-    allPagesCb.disabled = true;
-    if (!$("start_page").value) $("start_page").value = 1;
-    const start = parseInt($("start_page").value, 10) || 1;
-    const maxEnd = Math.min(total, start + cap - 1);
-    $("end_page").max = maxEnd;
-    $("start_page").max = total;
-    if (!$("end_page").value || parseInt($("end_page").value, 10) > maxEnd) {
-      $("end_page").value = maxEnd;
-    }
-    note.textContent = `Diagram + table mode converts up to ${cap} pages per run (this PDF has ${total}). Do a long book in ${cap}-page chunks.`;
+  allPagesCb.disabled = false; // never lock the all/range choice
+  $("start_page").max = total || "";
+  $("end_page").max = total || "";
+
+  if (on && total != null && cap != null && total > cap) {
+    note.textContent = `Diagram + table mode is slow and can crash on long books. This PDF has ${total} pages — for stability, convert a range of ~${cap} pages at a time instead of all pages (this is a safety tip, not a limit).`;
     note.classList.remove("hidden");
   } else {
-    allPagesCb.disabled = false;
     note.classList.add("hidden");
   }
 }
@@ -498,17 +493,34 @@ async function pollStatus(jobId) {
   } else if (s.status === "error" || s.status === "crashed") {
     stopPolling();
     hide(progressCard);
-    showError(s.message || "Conversion failed.", s.suggest_retry_without_layout);
+    showError(
+      s.message || "Conversion failed.",
+      s.suggest_retry_without_layout,
+      s.can_resume ? { jobId, done: s.pages_done, total: s.pages_total, filename: s.filename } : null
+    );
     loadRecentJobs();
   }
 }
 
 function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
 
-// ---- error / retry -------------------------------------------------------
-function showError(message, canRetry) {
+// ---- error / retry / resume ----------------------------------------------
+// resume = {jobId, done, total, filename} when a crashed PDF job can continue
+// from the pages it already finished; null otherwise.
+function showError(message, canRetry, resume) {
   errorMessage.textContent = message;
   canRetry ? show(retryBtn) : hide(retryBtn);
+  if (resume && resume.total) {
+    resumeBtn.textContent = `Resume — continue from page ${resume.done + 1} of ${resume.total}`;
+    resumeBtn.dataset.jobId = resume.jobId;
+    show(resumeBtn);
+    viewPartialBtn.dataset.jobId = resume.jobId;
+    viewPartialBtn.dataset.filename = resume.filename || "";
+    show(viewPartialBtn);
+  } else {
+    hide(resumeBtn);
+    hide(viewPartialBtn);
+  }
   show(errorCard);
 }
 
@@ -519,6 +531,27 @@ retryBtn.addEventListener("click", async () => {
   }
   $("use_layout").checked = false;
   await submitFormData(buildFormData(true));
+});
+
+resumeBtn.addEventListener("click", async () => {
+  const jobId = resumeBtn.dataset.jobId;
+  if (!jobId) return;
+  resumeBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/resume`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.text()) || "Resume failed");
+    startPolling(jobId);
+    loadRecentJobs();
+  } catch (err) {
+    showError(err.message, false, null);
+  } finally {
+    resumeBtn.disabled = false;
+  }
+});
+
+viewPartialBtn.addEventListener("click", () => {
+  const jobId = viewPartialBtn.dataset.jobId;
+  if (jobId) loadResults(jobId, viewPartialBtn.dataset.filename);
 });
 
 // ---- results -------------------------------------------------------------
@@ -805,7 +838,11 @@ function openJob(j) {
     loadResults(j.job_id, j.filename);
   } else if (j.status === "error" || j.status === "crashed") {
     hide(progressCard); hide(resultsCard);
-    showError(j.message || "Conversion failed.", j.suggest_retry_without_layout);
+    showError(
+      j.message || "Conversion failed.",
+      j.suggest_retry_without_layout,
+      j.can_resume ? { jobId: j.job_id, done: j.pages_done, total: j.pages_total, filename: j.filename } : null
+    );
   } else {
     startPolling(j.job_id);
   }

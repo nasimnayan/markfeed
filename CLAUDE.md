@@ -106,6 +106,9 @@ jobs/                       # runtime per-job working dirs (gitignored)
   `result.json` (stats rows minus markdown, + `label_col`), `converted.md`,
   `error.json` (on failure), `images/` (embedded figures), `previews/` (downscaled
   page JPEGs for the compare view — NOT in the download zip).
+- Resume checkpoints (PDF): `pages/<i>.md` + `pages/<i>.row.json` (every finished
+  page, atomic), `attempt.json` (page currently in flight, for poison detection),
+  `poison.json` (pages that crashed the worker). See "Resumable extraction" below.
 
 ## Conversion paths (converters/pdf_converter.py)
 
@@ -146,11 +149,26 @@ Per page, routed by whether the PDF page has an extractable text layer:
   only stable pieces. **Do not reintroduce PPStructureV3.**
 - **Streamlit was removed** for the same reason: a single-process server dies when
   a worker segfaults. FastAPI + subprocess isolation replaced it.
-- **Smart page cap** (`converters/limits.py`): extraction mode is capped per run —
-  ≤20 pages → all; 21–200 → 20; >200 → 10. Plain text mode has **no cap**
-  (a 700-page book at once is slow but stable). Enforced both in the UI
-  (`app.js applyLayoutCap`) and backend (`server/main.py create_job`).
+- **Page cap is advisory, not enforced** (`converters/limits.py`): extraction
+  mode used to hard-clamp per run (≤20→all; 21–200→20; >200→10), but since it's
+  a local no-cost tool, that was dropped. The user now picks "all pages" or a
+  range for extraction exactly like plain mode; `extraction_page_cap()` only
+  feeds a suggested chunk size shown as a warning note (`app.js applyLayoutCap`).
+  Backend (`server/main.py create_job`) no longer clamps. Plain text mode never
+  had a cap (a 700-page book at once is slow but stable).
 - **Verify/compare view is read-only** (user decided: no inline editing).
+- **Resumable extraction** (2026-06-23): since the page cap was dropped, a long
+  extraction run can crash mid-document. The worker checkpoints every finished
+  page to `pages/<i>.md` + `pages/<i>.row.json`. On any failure the JobManager
+  salvages those into a partial `converted.md` + `result.json` (so partial output
+  is viewable/downloadable), and `error.json` gets `can_resume`/`pages_done`/
+  `pages_total`. `POST /api/jobs/<id>/resume` re-enqueues the SAME job; the worker
+  reloads done pages (`worker._load_prior_pages`) and `convert_pdf` re-emits them
+  from disk without re-OCR, processing only the rest. **Poison-page guard:**
+  `attempt.json` marks the in-flight page; if it never produced a row it crashed
+  the worker — the first resume forces it to plain OCR (`force_plain_pages`), and
+  if it crashes again it's skipped (`skip_pages`, recorded in `poison.json`) so a
+  resume never loops forever. Non-PDF jobs are not resumable.
 
 ## Known limitations
 

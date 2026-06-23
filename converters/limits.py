@@ -1,13 +1,15 @@
-"""Page limits for the heavy diagram + table extraction mode.
+"""Suggested batch size for the heavy diagram + table extraction mode.
 
-Plain-text OCR has no cap (a whole 700-page book at once is slow but stable).
-Extraction mode is capped to a small batch so each run stays fast and bounds
-crash exposure — never more than 20 pages, fewer for big books.
+This is NO LONGER a hard cap. Extraction is local and free; the user may
+convert "all pages" or any range, exactly like plain mode. Because extraction
+is slow and can segfault on very long books, the UI shows an advisory note
+suggesting this batch size — but does not enforce it. Plain-text OCR has never
+been capped (a whole 700-page book is slow but stable).
 """
 
 
 def extraction_page_cap(total_pages: int) -> int:
-    """Max pages per run when diagram + table extraction is enabled."""
+    """Suggested (not enforced) pages-per-run for diagram + table extraction."""
     if total_pages <= 20:
         return total_pages
     if total_pages <= 200:
