@@ -19,6 +19,7 @@ import pytesseract
 from PIL import Image
 
 from converters import tesseract_config  # noqa: F401  (sets tesseract cmd + PATH)
+from converters.confidence import LOW_CONF  # shared low-confidence threshold (60)
 
 # Region label groups produced by PP-DocLayout_plus-L.
 DOC_TITLE_LABELS = {"doc_title"}
@@ -61,8 +62,24 @@ def _get_table_ocr(lang: str):
     return _table_ocr[lang]
 
 
-def process_page_image(img: Image.Image, lang: str, images_dir: Path, page_index: int) -> tuple[str, dict]:
-    """Run layout-aware extraction on a rendered page; return (markdown, counts)."""
+def process_page_image(
+    img: Image.Image,
+    lang: str,
+    images_dir: Path,
+    page_index: int,
+    collect_conf: bool = False,
+):
+    """Run layout-aware extraction on a rendered page.
+
+    Returns ``(markdown, counts)`` by default. When ``collect_conf=True`` returns
+    ``(markdown, counts, conf)`` where ``conf`` is ``(mean, low_count, html)`` or
+    ``None`` when the page has no OCR'd text regions. The mean is **word-weighted**
+    across all text/title/formula regions (raw per-word confidences are pooled and
+    averaged once), and is a **partial-page** measure — it excludes img2table tables
+    and cropped figures, which carry no Tesseract text confidence. The default-off
+    flag keeps the legacy 2-tuple contract for other callers (image_converter,
+    benchmark) unchanged.
+    """
     import numpy as np
 
     img = img.convert("RGB")
@@ -74,6 +91,7 @@ def process_page_image(img: Image.Image, lang: str, images_dir: Path, page_index
 
     counts = {"table_count": 0, "image_count": 0, "formula_count": 0}
     md_parts = []
+    page_confs: list[float] = []  # pooled per-word confidences from all _ocr regions
     fig_n = 0
 
     for b in boxes:
@@ -88,9 +106,10 @@ def process_page_image(img: Image.Image, lang: str, images_dir: Path, page_index
                 md_parts.append(table_md)
                 counts["table_count"] += 1
             else:  # not a real grid -> fall back to plain text
-                text = _ocr(crop, lang)
+                text, confs = _ocr(crop, lang)
                 if text:
                     md_parts.append(text)
+                    page_confs.extend(confs)
         elif label in FIGURE_LABELS:
             fig_n += 1
             fname = f"page_{page_index:04d}_fig_{fig_n}.png"
@@ -98,26 +117,63 @@ def process_page_image(img: Image.Image, lang: str, images_dir: Path, page_index
             md_parts.append(f"![](images/{fname})")
             counts["image_count"] += 1
         elif label in DOC_TITLE_LABELS:
-            text = _ocr(crop, lang)
+            text, confs = _ocr(crop, lang)
             if text:
                 md_parts.append(f"# {text}")
+                page_confs.extend(confs)
         elif label in TITLE_LABELS:
-            text = _ocr(crop, lang)
+            text, confs = _ocr(crop, lang)
             if text:
                 md_parts.append(f"## {text}")
+                page_confs.extend(confs)
         else:  # text + formula labels -> inline text
-            text = _ocr(crop, lang)
+            text, confs = _ocr(crop, lang)
             if text:
                 md_parts.append(text)
+                page_confs.extend(confs)
                 if label in FORMULA_LABELS:
                     counts["formula_count"] += 1
 
     markdown = "\n\n".join(md_parts)
-    return markdown, counts
+    if not collect_conf:
+        return markdown, counts
+    if page_confs:
+        mean = round(sum(page_confs) / len(page_confs), 1)
+        low = sum(1 for c in page_confs if c < LOW_CONF)
+        conf = (mean, low, "")  # html highlight not built for hybrid regions yet
+    else:
+        conf = None
+    return markdown, counts, conf
 
 
-def _ocr(crop: Image.Image, lang: str) -> str:
-    return pytesseract.image_to_string(crop, lang=lang).strip()
+def _ocr(crop: Image.Image, lang: str) -> tuple[str, list[float]]:
+    """OCR a text region; return (text, per-word confidence values).
+
+    Uses ``image_to_data`` (the same engine pass as ``image_to_string``) so the
+    confidences come for free in one pass. Text is rebuilt line-by-line and the
+    confidences are filtered exactly as confidence.py does for plain OCR: skip
+    empty words and skip Tesseract's -1 non-text sentinel. A region with no valid
+    words returns ("", []) and so contributes nothing to the page mean.
+    """
+    data = pytesseract.image_to_data(crop, lang=lang, output_type=pytesseract.Output.DICT)
+    lines: dict[tuple, list[str]] = {}
+    order: list[tuple] = []
+    confs: list[float] = []
+    for i in range(len(data["text"])):
+        word = data["text"][i]
+        if not word or not word.strip():
+            continue
+        conf = float(data["conf"][i])
+        if conf < 0:  # -1 marks non-text layout boxes
+            continue
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        if key not in lines:
+            lines[key] = []
+            order.append(key)
+        lines[key].append(word)
+        confs.append(conf)
+    text = "\n".join(" ".join(lines[k]) for k in order).strip()
+    return text, confs
 
 
 def _crop(img: Image.Image, bbox) -> Image.Image | None:

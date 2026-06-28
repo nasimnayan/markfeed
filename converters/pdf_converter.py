@@ -60,6 +60,17 @@ DIGITAL_TEXT_THRESHOLD = 20  # min chars of extractable text to treat a page as 
 DOMINANT_IMAGE_MAX_TEXT = 200
 DOMINANT_IMAGE_AREA_THRESHOLD = 0.9
 
+# E-paper / newspaper PDFs render the whole article (headline + body) as an image,
+# centered inside wide white margins, with only a few chars of real text (masthead,
+# edition, publish date). The content image covers well under 90% of the *full* page
+# (e.g. ~40% with margins), so _dominant_page_image misses it and the page is wrongly
+# treated as "digital" — pymupdf4llm then just links the image without OCR and the whole
+# article body is lost. Detect it: if the page has only metadata-length text but its
+# images jointly cover more than a masthead logo's worth of area, render and OCR the
+# page. The masthead logo alone is ~1% of the page, so this cleanly separates a real
+# content image from a bare logo.
+IMAGE_CONTENT_COVERAGE_THRESHOLD = 0.12
+
 
 def _dominant_page_image(doc: fitz.Document, page: fitz.Page) -> Image.Image | None:
     """Return the embedded image as a PIL Image if it covers nearly the whole page."""
@@ -72,6 +83,47 @@ def _dominant_page_image(doc: fitz.Document, page: fitz.Page) -> Image.Image | N
             data = doc.extract_image(info["xref"])["image"]
             return Image.open(io.BytesIO(data)).convert("RGB")
     return None
+
+
+def _union_area(rects: list[fitz.Rect]) -> float:
+    """Area covered by the union of axis-aligned rectangles (overlaps counted once)."""
+    if not rects:
+        return 0.0
+    xs = sorted({x for r in rects for x in (r.x0, r.x1)})
+    total = 0.0
+    for i in range(len(xs) - 1):
+        x0, x1 = xs[i], xs[i + 1]
+        width = x1 - x0
+        if width <= 0:
+            continue
+        # Merge the y-intervals of every rect spanning this vertical slab.
+        intervals = sorted((r.y0, r.y1) for r in rects if r.x0 <= x0 and r.x1 >= x1)
+        covered = 0.0
+        cur_lo = cur_hi = None
+        for lo, hi in intervals:
+            if cur_hi is None or lo > cur_hi:
+                if cur_hi is not None:
+                    covered += cur_hi - cur_lo
+                cur_lo, cur_hi = lo, hi
+            else:
+                cur_hi = max(cur_hi, hi)
+        if cur_hi is not None:
+            covered += cur_hi - cur_lo
+        total += width * covered
+    return total
+
+
+def _image_coverage_fraction(page: fitz.Page) -> float:
+    """Fraction of the page area covered by the union of embedded image boxes."""
+    page_area = page.rect.width * page.rect.height
+    if not page_area:
+        return 0.0
+    rects = []
+    for info in page.get_image_info(xrefs=True):
+        bbox = fitz.Rect(info["bbox"]) & page.rect
+        if bbox.is_valid and not bbox.is_empty:
+            rects.append(bbox)
+    return _union_area(rects) / page_area
 
 
 # Tesseract rejects images with a dimension beyond ~32767px ("Image too large").
@@ -221,14 +273,22 @@ def convert_pdf(
         page = doc[i]
         text = page.get_text().strip()
         layout_counts = None
-        conf_info = None  # (mean, low, html) when whole-page OCR ran
+        conf_info = None  # (mean, low, html) when OCR confidence was captured
+        conf_scope = "full_page"  # plain OCR covers the whole page; hybrid is partial
         rendered_img = None  # full-res render, reused for the preview when present
 
         dominant_img = None
+        image_heavy = False
         if len(text) <= DOMINANT_IMAGE_MAX_TEXT:
             dominant_img = _dominant_page_image(doc, page)
+            if dominant_img is None:
+                # No single full-page image, but a margin-padded e-paper article image
+                # (or a mosaic of images) should still be OCR'd, not linked.
+                image_heavy = (
+                    _image_coverage_fraction(page) >= IMAGE_CONTENT_COVERAGE_THRESHOLD
+                )
 
-        if len(text) > DIGITAL_TEXT_THRESHOLD and dominant_img is None:
+        if len(text) > DIGITAL_TEXT_THRESHOLD and dominant_img is None and not image_heavy:
             page_md = pymupdf4llm.to_markdown(
                 doc, pages=[i], write_images=True, image_path=str(images_dir), use_ocr=False
             ).strip()
@@ -254,9 +314,13 @@ def convert_pdf(
 
             if use_layout and i not in force_plain_pages:
                 try:
-                    page_md, layout_counts = layout_ocr.process_page_image(
-                        ocr_img, lang, images_dir, i
+                    page_md, layout_counts, conf_hybrid = layout_ocr.process_page_image(
+                        ocr_img, lang, images_dir, i, collect_conf=True
                     )
+                    if conf_hybrid is not None:
+                        # Partial (text-region) confidence — distinct from plain OCR.
+                        conf_info = conf_hybrid
+                        conf_scope = "text_regions"
                 except Exception:
                     page_md, c_mean, c_low, c_html = confidence.ocr_with_confidence(ocr_img, lang)
                     conf_info = (c_mean, c_low, c_html)
@@ -300,6 +364,7 @@ def convert_pdf(
             c_mean, c_low, c_html = conf_info
             row["mean_conf"] = c_mean
             row["low_conf_count"] = c_low
+            row["conf_scope"] = conf_scope
             if conf_dir is not None:
                 conf_dir.mkdir(parents=True, exist_ok=True)
                 (conf_dir / f"{i}.json").write_text(
